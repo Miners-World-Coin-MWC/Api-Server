@@ -14,19 +14,19 @@
     "generate-wrangler": "node scripts/generate-wrangler.mjs"
   },
   "dependencies": {
-    "@hono/zod-validator": "0.4.3",
-    "bip32": "5.0.0",
-    "bip39": "3.1.0",
-    "bitcoinjs-lib": "6.1.7",
-    "hono": "4.9.7",
-    "tiny-secp256k1": "2.2.3",
-    "ecpair": "3.0.0",
-    "buffer": "6.0.3"
+    "@hono/zod-validator": "^0.4.3",
+    "bip32": "^5.0.0",
+    "bip39": "^3.1.0",
+    "bitcoinjs-lib": "^6.1.7",
+    "hono": "^4.9.7",
+    "tiny-secp256k1": "^2.2.3",
+    "ecpair": "^3.0.0",
+    "buffer": "^6.0.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "4.20260919.0",
-    "typescript": "5.9.2",
-    "vitest": "3.2.4",
-    "wrangler": "4.38.0"
+    "@cloudflare/workers-types": "^4.20251011.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.38.0"
   }
 }
