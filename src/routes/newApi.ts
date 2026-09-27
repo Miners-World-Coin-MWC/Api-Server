@@ -141,7 +141,9 @@ export async function history(c: Context<AppEnv>) {
 
 export async function locks(c: Context<AppEnv>) {
   const id = c.get("requestId");
-  const pubkey = c.req.param("pubkey").toLowerCase();
+  const rawPubkey = c.req.param("pubkey");
+  if (!rawPubkey) return fail("INVALID_PUBKEY", "Public key must be 33 or 65 bytes of hex.", id);
+  const pubkey = rawPubkey.toLowerCase();
   if (!validHex(pubkey, 33) && !validHex(pubkey, 65)) {
     return fail("INVALID_PUBKEY", "Public key must be 33 or 65 bytes of hex.", id);
   }
@@ -154,7 +156,9 @@ export async function locks(c: Context<AppEnv>) {
 
 export async function owed(c: Context<AppEnv>) {
   const id = c.get("requestId");
-  const pubkey = c.req.param("pubkey").toLowerCase();
+  const rawPubkey = c.req.param("pubkey");
+  if (!rawPubkey) return fail("INVALID_PUBKEY", "Public key must be 33 or 65 bytes of hex.", id);
+  const pubkey = rawPubkey.toLowerCase();
   if (!validHex(pubkey, 33) && !validHex(pubkey, 65)) {
     return fail("INVALID_PUBKEY", "Public key must be 33 or 65 bytes of hex.", id);
   }
