@@ -34,7 +34,10 @@ app.get("/api/history/:address", history);
 app.get("/api/locks/:pubkey", locks);
 app.get("/api/owed/:pubkey", owed);
 
-app.post("/api/admin/locks/register", registerLock);
+// Public: no admin key. Anyone can register their own lock; the handler verifies it
+// on-chain itself before indexing (see routes/newApi.ts for why this is safe).
+app.post("/api/locks/register", registerLock);
+
 app.post("/api/admin/workers/heartbeat", heartbeat);
 app.post("/api/admin/ledger/entry", ledgerEntry);
 app.post("/api/admin/treasury", treasury);

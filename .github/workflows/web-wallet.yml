@@ -28,13 +28,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install wallet dependencies
-        working-directory: web-wallet
+      - name: Install dependencies (root + web-wallet workspace)
         run: npm install
 
       - name: Build
-        working-directory: web-wallet
-        run: npm run build
+        run: npm run build --workspace=web-wallet
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

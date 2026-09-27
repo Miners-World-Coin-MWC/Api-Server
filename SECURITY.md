@@ -33,6 +33,11 @@ All `/api/admin/*` endpoints require the Worker secret `ADMIN_API_KEY`.
 
 Use a long random value and rotate it periodically.
 
+Note that `POST /api/locks/register` is intentionally NOT under `/api/admin/*` and requires
+no key. Locking is a user decision, not an admin-controlled one. The endpoint is safe to
+leave open because it doesn't trust the caller's claims — it recomputes the lock address
+from `(pubkey, unlock_time)` itself and verifies real on-chain funds before indexing it.
+
 ## Database
 
 D1 contains public/accounting metadata only.

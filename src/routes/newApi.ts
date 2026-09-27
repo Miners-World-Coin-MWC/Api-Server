@@ -5,6 +5,7 @@ import { fail, ok } from "../lib/response";
 import { validBase58ish, validHex, positiveInt } from "../lib/validate";
 import { requireAdmin } from "../lib/security";
 import { atomicString, mwcStringFromAtomic } from "../lib/money";
+import { cltvP2sh } from "../lib/lockScript";
 
 function now() { return Math.floor(Date.now() / 1000); }
 
@@ -220,16 +221,49 @@ export async function healthsync(c: Context<AppEnv>) {
   }
 }
 
+/**
+ * Public, non-custodial lock registration.
+ *
+ * There is deliberately NO admin key here. Anyone can call this endpoint, but it can't be
+ * used to plant fake data because the server doesn't trust anything the caller says about
+ * the lock — it recomputes the CLTV redeem script and P2SH address itself from (pubkey,
+ * unlock_time) and only indexes the lock if:
+ *   1. the recomputed script/address match what the caller claims, AND
+ *   2. the original chain API shows that address actually holds real funds right now.
+ * This just makes an already-public on-chain fact (a funded CLTV lock the user created
+ * client-side and broadcast themselves) discoverable by pubkey. It never moves funds,
+ * never requires a secret, and can't register a lock that doesn't really exist on-chain.
+ */
 export async function registerLock(c: Context<AppEnv>) {
   const id = c.get("requestId");
-  if (!(await requireAdmin(c.req.raw, c.env))) return fail("UNAUTHORIZED", "Admin authorization required.", id, 401);
   const body = await c.req.json<any>();
-  const { pubkey, redeem_script_hex, address, unlock_time, lock_type } = body || {};
-  if ((!validHex(pubkey, 33) && !validHex(pubkey, 65)) || !validHex(redeem_script_hex) ||
-      !validBase58ish(address) || !Number.isInteger(unlock_time) ||
-      !["height","time"].includes(lock_type)) {
-    return fail("INVALID_LOCK", "Invalid lock watcher payload.", id);
+  const { pubkey, unlock_time, lock_type } = body || {};
+
+  if ((!validHex(pubkey, 33) && !validHex(pubkey, 65)) ||
+      !Number.isInteger(unlock_time) || unlock_time < 0 || unlock_time > 0xffffffff ||
+      !["height", "time"].includes(lock_type)) {
+    return fail("INVALID_LOCK", "Invalid lock payload.", id);
   }
+
+  let derived: { redeemScriptHex: string; address: string };
+  try {
+    derived = cltvP2sh(unlock_time, pubkey.toLowerCase());
+  } catch (e) {
+    return fail("INVALID_LOCK", `Could not derive lock address: ${String(e)}`, id);
+  }
+
+  // Proof of funds: the derived address must actually be funded on-chain before we'll index it.
+  let hasFunds = false;
+  try {
+    const balance = await getOriginalJson<any>(c.env, `/balance/${encodeURIComponent(derived.address)}`);
+    hasFunds = Number(balance?.balance ?? 0) > 0;
+  } catch (e) {
+    return fail("UPSTREAM_ERROR", `Could not verify lock address on-chain: ${String(e)}`, id, 502);
+  }
+  if (!hasFunds) {
+    return fail("LOCK_NOT_FUNDED", "That lock address has no on-chain balance yet. Broadcast the locking transaction first, then register it.", id, 409);
+  }
+
   const lockId = crypto.randomUUID();
   const timestamp = now();
   await c.env.DB.prepare(`
@@ -238,8 +272,16 @@ export async function registerLock(c: Context<AppEnv>) {
     ON CONFLICT(pubkey,redeem_script_hex) DO UPDATE SET
       address=excluded.address, unlock_time=excluded.unlock_time,
       lock_type=excluded.lock_type, updated_at=excluded.updated_at
-  `).bind(lockId, pubkey.toLowerCase(), redeem_script_hex.toLowerCase(), address, unlock_time, lock_type, timestamp, timestamp).run();
-  return ok({ registered: true, pubkey: pubkey.toLowerCase(), address, unlock_time, lock_type }, id);
+  `).bind(lockId, pubkey.toLowerCase(), derived.redeemScriptHex, derived.address, unlock_time, lock_type, timestamp, timestamp).run();
+
+  return ok({
+    registered: true,
+    pubkey: pubkey.toLowerCase(),
+    address: derived.address,
+    redeem_script_hex: derived.redeemScriptHex,
+    unlock_time,
+    lock_type
+  }, id);
 }
 
 export async function heartbeat(c: Context<AppEnv>) {

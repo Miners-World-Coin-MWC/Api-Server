@@ -4,6 +4,7 @@
   "private": true,
   "description": "Production-oriented Miners World Coin API gateway and non-custodial browser wallet core.",
   "type": "module",
+  "workspaces": ["web-wallet"],
   "scripts": {
     "dev": "wrangler dev",
     "build": "tsc --noEmit",

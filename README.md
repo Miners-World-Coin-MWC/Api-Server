@@ -88,9 +88,16 @@ New API:
 - `GET /api/locks/:pubkey`
 - `GET /api/owed/:pubkey`
 
-Administrative endpoints:
+Public, no key required:
 
-- `POST /api/admin/locks/register`
+- `POST /api/locks/register` — registers a lock for discovery by pubkey. Anyone can call
+  this, but it's not trust-based: the server independently recomputes the CLTV redeem
+  script + P2SH address from `(pubkey, unlock_time)` and only indexes it if that address
+  is actually funded on-chain right now. There is no admin control over whether a user
+  locks their coins — that's entirely the user's own decision, made client-side.
+
+Administrative endpoints (ledger/reward bookkeeping only — never used for the lock decision itself):
+
 - `POST /api/admin/workers/heartbeat`
 - `POST /api/admin/ledger/entry`
 - `POST /api/admin/treasury`
@@ -311,21 +318,21 @@ owed = earned + adjustments - settled
 
 The public `/api/locks/:pubkey` endpoint reads registered lock watchers.
 
-A wallet/service can register a known CLTV lock with:
+Anyone can register a CLTV lock they created — there is no admin key on this path, by design:
 
 ```text
-POST /api/admin/locks/register
+POST /api/locks/register
+{ "pubkey": "...", "unlock_time": 1780000000, "lock_type": "time" }
 ```
 
-The registration contains only public information:
+The user builds and broadcasts the actual locking transaction themselves, client-side,
+with their own private key — the API never sees a private key and never decides whether
+someone locks their coins. This endpoint just makes that lock discoverable afterwards.
+It only accepts a `pubkey` and `unlock_time`; the server derives the redeem script and
+P2SH address itself and checks the original chain API to confirm that address is really
+funded before indexing it, so the index can't be poisoned with fake or unfunded locks.
 
-- public key
-- redeem script
-- P2SH address
-- unlock time
-- height/time lock type
-
-Private keys are never required.
+Private keys are never required or accepted.
 
 ## Production security
 
