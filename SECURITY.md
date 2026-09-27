@@ -7,7 +7,6 @@ Private keys, WIFs, seeds and mnemonics belong only in the wallet runtime.
 They must never be:
 
 - sent to the API
-- written to D1
 - written to Worker logs
 - included in GitHub issues
 - included in analytics
@@ -27,19 +26,13 @@ X-MWC-Broadcast-Key: <secret>
 
 Do not expose this secret in a public web application if the public wallet needs unrestricted broadcasting. In that case, prefer Cloudflare edge rate limiting and abuse controls.
 
-## Admin endpoints
+## No admin surface, no database
 
-All `/api/admin/*` endpoints require the Worker secret `ADMIN_API_KEY`.
-
-Use a long random value and rotate it periodically.
-
-Note that `POST /api/locks/register` is intentionally NOT under `/api/admin/*` and requires
-no key. Locking is a user decision, not an admin-controlled one. The endpoint is safe to
-leave open because it doesn't trust the caller's claims — it recomputes the lock address
-from `(pubkey, unlock_time)` itself and verifies real on-chain funds before indexing it.
-
-## Database
-
-D1 contains public/accounting metadata only.
-
-No private wallet material belongs in the database.
+There is no admin key, no admin-only endpoint, and no database anywhere in this project.
+Every `/api/*` route is public and stateless: it derives whatever it needs to answer
+(a CLTV lock address, a balance, a sync status) on the fly from `(pubkey, unlock_time)` or an
+address, and checks the real chain state via the original API before answering. There is
+nothing for an attacker to poison and nothing that requires a secret to operate, because
+nothing is ever written down server-side — including whether, or when, a user chooses to
+lock their coins. That decision, and everything needed to act on it, stays entirely in the
+browser wallet with the user's own key.

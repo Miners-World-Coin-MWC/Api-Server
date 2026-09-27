@@ -2,6 +2,10 @@
 
 This repository is the GitHub-first production foundation for the Miners World Coin (MWC) web wallet and API gateway.
 
+Everything lives in this repo and runs from GitHub: a Cloudflare Worker (deployed by GitHub
+Actions) and a static browser wallet (deployed to GitHub Pages by GitHub Actions). There is
+no database and no server-side account system anywhere in this stack.
+
 ## Architecture
 
 ```text
@@ -12,15 +16,13 @@ GitHub
   └── GitHub Actions
           │
           ▼
-   Cloudflare Workers
+   Cloudflare Workers  (stateless — no database)
           │
-          ├── /info, /price, /height/... etc → original MWC API
-          ├── /broadcast → original MWC API
-          ├── /api/* → new wallet/ledger/lock API
-          └── scheduled health job
-                  │
-                  ▼
-             Cloudflare D1
+          ├── /info, /price, /height/... etc → original MWC API (proxied)
+          ├── /broadcast → original MWC API (proxied)
+          └── /api/* → new wallet API (nodechain, paramschain, balance,
+                        history, locks, owed, healthsync — all computed
+                        live from public chain data, nothing stored)
 
 Browser wallet
   │
@@ -38,7 +40,9 @@ Browser wallet
        POST /broadcast
 ```
 
-The API is **not custodial**. It never needs a user's mnemonic or private key.
+The API is **not custodial**. It never needs a user's mnemonic or private key, and it never
+stores anything on a user's behalf — there is no admin key anywhere in this project. Whether
+someone locks their coins is entirely their own decision, made and executed client-side.
 
 ## MWC Core compatibility
 
@@ -76,37 +80,28 @@ All original API paths are proxied unchanged:
 - `GET /decode/:raw`
 - `POST /broadcast`
 
-New API:
+New API — every one of these is stateless and public, no key required:
 
-- `GET /api/nodechain`
-- `GET /api/paramschain`
-- `GET /api/minimum`
-- `GET /api/ledgerincome`
-- `GET /api/healthsync`
-- `GET /api/balance/:address`
-- `GET /api/history/:address`
-- `GET /api/locks/:pubkey`
-- `GET /api/owed/:pubkey`
+- `GET /api/nodechain` — height, peers, sync state, difficulty
+- `GET /api/paramschain` — chain parameters and CLTV lock terms
+- `GET /api/minimum` — today's minimum lockup
+- `GET /api/healthsync` — API + chain sync status
+- `GET /api/balance/:address` — confirmed balance and UTXOs
+- `GET /api/history/:address` — received transactions, with confirmations
+- `GET /api/locks/:pubkey?unlock_time=...&lock_type=height|time` — checks a single CLTV lock
+- `GET /api/owed/:pubkey?unlock_times=1780000000,850000` — checks several CLTV locks at once and sums what's currently claimable
 
-Public, no key required:
+### Why locks/owed need no database
 
-- `POST /api/locks/register` — registers a lock for discovery by pubkey. Anyone can call
-  this, but it's not trust-based: the server independently recomputes the CLTV redeem
-  script + P2SH address from `(pubkey, unlock_time)` and only indexes it if that address
-  is actually funded on-chain right now. There is no admin control over whether a user
-  locks their coins — that's entirely the user's own decision, made client-side.
+A CLTV lock's address is 100% deterministic from `(pubkey, unlock_time)`. Whoever created the
+lock built the script and broadcast the transaction themselves, client-side — so they already
+know both values. `/api/locks/:pubkey` and `/api/owed/:pubkey` don't look anything up in
+storage; they recompute the same P2SH address on demand and ask the original chain API what's
+actually sitting there right now. Nothing is registered, indexed, or persisted anywhere.
 
-Administrative endpoints (ledger/reward bookkeeping only — never used for the lock decision itself):
-
-- `POST /api/admin/workers/heartbeat`
-- `POST /api/admin/ledger/entry`
-- `POST /api/admin/treasury`
-
-Admin endpoints require:
-
-```text
-Authorization: Bearer <ADMIN_API_KEY>
-```
+One consequence: if you forget the `unlock_time` you used, there's no way to recover it from
+the server — the wallet is responsible for remembering the locks it created (e.g. in its own
+local storage), the same way it's responsible for the private key.
 
 ## GitHub-hosted web wallet
 
@@ -126,44 +121,20 @@ Enable GitHub Pages for the repository with **GitHub Actions** as the source. Af
 
 ## One-time Cloudflare setup
 
-### 1. Create the D1 database
+### 1. Create a Cloudflare API token
 
-Run:
-
-```bash
-npm install
-npx wrangler login
-npx wrangler d1 create minersworld_api
-```
-
-Cloudflare will print the database ID. Put that ID into a GitHub Actions secret named:
-
-```text
-CLOUDFLARE_D1_DATABASE_ID
-```
-
-### 2. Create a Cloudflare API token
-
-Create a scoped token that can deploy the Worker and manage the D1 database used by this project.
+Create a scoped token that can deploy this Worker.
 
 Store these GitHub Actions secrets:
 
 ```text
 CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_API_TOKEN
-CLOUDFLARE_D1_DATABASE_ID
-MWC_ADMIN_API_KEY
 ```
 
-Generate the admin key locally with:
+Do not commit either of these values.
 
-```bash
-openssl rand -hex 32
-```
-
-Do not commit any of these values.
-
-### 3. Cloudflare custom domain
+### 2. Cloudflare custom domain
 
 The Wrangler configuration uses:
 
@@ -177,7 +148,7 @@ Your `minersworld.org` zone must be active in Cloudflare. On first deployment Cl
 
 If you want a different hostname, change the `routes` entry in `wrangler.jsonc`.
 
-### 4. Push to GitHub
+### 3. Push to GitHub
 
 After the secrets are configured:
 
@@ -192,35 +163,26 @@ GitHub Actions then:
 1. installs dependencies
 2. typechecks
 3. runs tests
-4. generates the real Wrangler config from the D1 secret
-5. applies D1 migrations
-6. installs the admin API secret
-7. deploys the Worker
-8. runs a smoke test
+4. deploys the Worker straight from `wrangler.jsonc`
+5. runs a smoke test
 
 ## Local development
-
-Create a local D1 database:
-
-```bash
-npx wrangler d1 migrations apply minersworld_api --local
-```
 
 Run:
 
 ```bash
+npm install
 npm run dev
 ```
 
-The Worker will be available on Wrangler's local URL.
+The Worker will be available on Wrangler's local URL. There's no local database step — the
+Worker only needs the vars in `wrangler.jsonc` / `.dev.vars`.
 
-For local secrets:
+For local secrets (currently just the optional broadcast key):
 
 ```bash
 cp .dev.vars.example .dev.vars
 ```
-
-Set a real local `ADMIN_API_KEY`.
 
 ## Wallet core
 
@@ -240,6 +202,9 @@ It provides:
 - PSBT transaction construction
 - local transaction signing
 - raw transaction extraction
+
+`src/lib/lockScript.ts` is a small, WASM-free subset of the same CLTV/P2SH math, used only by
+the Worker to *verify* a lock address someone asks about — never to sign or move funds.
 
 ### Standard receive address
 
@@ -264,7 +229,12 @@ OP_DROP
 OP_CHECKSIG
 ```
 
-The wallet can turn that redeem script into an MWC P2SH address.
+The wallet can turn that redeem script into an MWC P2SH address, fund it with a normal
+transaction, and later spend from it once the lock time has passed. All of this — deciding to
+lock, building the script, broadcasting the funding transaction, and later reclaiming the
+funds — happens entirely client-side with the user's own key. The API is never asked to
+approve, register, or track any of it; `/api/locks/:pubkey` and `/api/owed/:pubkey` are purely
+a convenience for checking status, described above.
 
 Important: CLTV is enforced by the transaction's `nLockTime` and input `nSequence`. MWC Core checks that the lock-time type matches, that the transaction lock time is at least the script lock time, and that the spending input is not `SEQUENCE_FINAL`.
 
@@ -292,9 +262,9 @@ The API should never receive:
 
 The API only receives public blockchain information and, for broadcasting, an already-signed transaction.
 
-## Ledger
+## Amounts
 
-Amounts are stored as integer atomic units.
+Amounts are stored and returned as integer atomic units.
 
 Never use floating-point MWC amounts for accounting.
 
@@ -304,49 +274,15 @@ For example:
 1 MWC = 100000000 atomic units
 ```
 
-The D1 ledger keeps earned, allocated, settled, and adjustment entries.
-
-`/api/owed/:pubkey` calculates:
-
-```text
-owed = earned + adjustments - settled
-```
-
-`/api/ledgerincome` calculates global outstanding funds and compares them against the configured treasury balance.
-
-## Lock tracking
-
-The public `/api/locks/:pubkey` endpoint reads registered lock watchers.
-
-Anyone can register a CLTV lock they created — there is no admin key on this path, by design:
-
-```text
-POST /api/locks/register
-{ "pubkey": "...", "unlock_time": 1780000000, "lock_type": "time" }
-```
-
-The user builds and broadcasts the actual locking transaction themselves, client-side,
-with their own private key — the API never sees a private key and never decides whether
-someone locks their coins. This endpoint just makes that lock discoverable afterwards.
-It only accepts a `pubkey` and `unlock_time`; the server derives the redeem script and
-P2SH address itself and checks the original chain API to confirm that address is really
-funded before indexing it, so the index can't be poisoned with fake or unfunded locks.
-
-Private keys are never required or accepted.
-
 ## Production security
 
 Recommended production controls:
 
 - keep Cloudflare API credentials only in GitHub Secrets
-- keep the admin API key only in Worker Secrets
 - never log private keys or mnemonics
-- never store wallet seeds in D1
 - keep the original node RPC port private
 - put Cloudflare rate limiting/WAF in front of `/broadcast`
 - monitor `/api/healthsync`
-- use a separate admin key for production
-- rotate admin credentials if exposed
 - review all transaction-building changes against MWC Core before release
 
 ## Important transaction compatibility rule

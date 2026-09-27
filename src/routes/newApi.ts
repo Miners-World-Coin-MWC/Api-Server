@@ -1,13 +1,10 @@
 import type { Context } from "hono";
-import type { AppEnv, MwcUtxo } from "../types";
+import type { AppEnv } from "../types";
 import { getOriginalJson } from "../lib/originalApi";
 import { fail, ok } from "../lib/response";
 import { validBase58ish, validHex, positiveInt } from "../lib/validate";
-import { requireAdmin } from "../lib/security";
-import { atomicString, mwcStringFromAtomic } from "../lib/money";
+import { atomicString } from "../lib/money";
 import { cltvP2sh } from "../lib/lockScript";
-
-function now() { return Math.floor(Date.now() / 1000); }
 
 export async function nodechain(c: Context<AppEnv>) {
   const id = c.get("requestId");
@@ -25,6 +22,7 @@ export async function nodechain(c: Context<AppEnv>) {
       headers,
       best_block_hash: info.bestblockhash ?? info.hash ?? null,
       difficulty: info.difficulty ?? null,
+      median_time: info.mediantime ?? null,
       peers: Array.isArray(peers) ? peers.length : Number(peers?.count ?? 0),
       sync: {
         state: synced ? "synced" : "syncing",
@@ -52,7 +50,6 @@ export async function paramschain(c: Context<AppEnv>) {
     block_time_seconds: 120,
     halving_interval: 300000,
     max_supply_mwc: 300000000,
-    developer_fee_percent: 10,
     segwit: true,
     cltv: {
       opcode: "OP_CHECKLOCKTIMEVERIFY",
@@ -139,6 +136,19 @@ export async function history(c: Context<AppEnv>) {
   }
 }
 
+/**
+ * Fully stateless, non-custodial CLTV lock lookup. No database, no admin, nothing to register.
+ *
+ * A CLTV lock's address is 100% deterministic from (pubkey, unlock_time). The wallet that
+ * created the lock already knows both values (it built the script client-side and broadcast
+ * it itself), so there's nothing to "index" server-side — this endpoint just recomputes the
+ * same address on demand and asks the original chain API what's actually sitting there right
+ * now. That also means there's no way to discover a lock's unlock_time if you've forgotten
+ * it; the wallet is responsible for remembering the locks it created (e.g. in its own local
+ * storage), the same way it's responsible for the private key.
+ *
+ * GET /api/locks/:pubkey?unlock_time=170000000&lock_type=time
+ */
 export async function locks(c: Context<AppEnv>) {
   const id = c.get("requestId");
   const rawPubkey = c.req.param("pubkey");
@@ -147,13 +157,79 @@ export async function locks(c: Context<AppEnv>) {
   if (!validHex(pubkey, 33) && !validHex(pubkey, 65)) {
     return fail("INVALID_PUBKEY", "Public key must be 33 or 65 bytes of hex.", id);
   }
-  const rows = await c.env.DB.prepare(
-    `SELECT id,pubkey,redeem_script_hex,address,unlock_time,lock_type,created_at,updated_at
-     FROM lock_watchers WHERE pubkey = ? ORDER BY unlock_time ASC`
-  ).bind(pubkey).all();
-  return ok({ pubkey, locks: rows.results }, id);
+
+  const unlockTime = Number.parseInt(c.req.query("unlock_time") ?? "", 10);
+  const lockType = c.req.query("lock_type");
+  if (!Number.isInteger(unlockTime) || unlockTime < 0 || unlockTime > 0xffffffff) {
+    return fail("INVALID_UNLOCK_TIME", "Query param unlock_time is required and must be an unsigned 32-bit integer.", id);
+  }
+  if (lockType !== "height" && lockType !== "time") {
+    return fail("INVALID_LOCK_TYPE", "Query param lock_type must be 'height' or 'time'.", id);
+  }
+
+  let derived: { redeemScriptHex: string; address: string };
+  try {
+    derived = cltvP2sh(unlockTime, pubkey);
+  } catch (e) {
+    return fail("INVALID_LOCK", `Could not derive lock address: ${String(e)}`, id);
+  }
+
+  try {
+    const [balanceData, unspentData, info] = await Promise.all([
+      getOriginalJson<any>(c.env, `/balance/${encodeURIComponent(derived.address)}`),
+      getOriginalJson<any>(c.env, `/unspent/${encodeURIComponent(derived.address)}`),
+      getOriginalJson<any>(c.env, "/info")
+    ]);
+    const utxos = Array.isArray(unspentData) ? unspentData : (unspentData?.unspent ?? []);
+    const tip = lockType === "height" ? Number(info.blocks ?? info.height ?? 0) : Number(info.mediantime ?? 0);
+    return ok({
+      pubkey,
+      unlock_time: unlockTime,
+      lock_type: lockType,
+      address: derived.address,
+      redeem_script_hex: derived.redeemScriptHex,
+      balance_atomic: atomicString(balanceData?.balance ?? balanceData?.confirmed ?? 0),
+      utxos,
+      spendable_now: tip >= unlockTime
+    }, id);
+  } catch (e) {
+    return fail("UPSTREAM_ERROR", String(e), id, 502);
+  }
 }
 
+export async function healthsync(c: Context<AppEnv>) {
+  const id = c.get("requestId");
+  try {
+    const info = await getOriginalJson<any>(c.env, "/info");
+    const blocks = Number(info.blocks ?? info.height ?? 0);
+    const headers = Number(info.headers ?? blocks);
+    return ok({
+      api: "ok",
+      chain: {
+        height: blocks,
+        headers,
+        synced: headers <= blocks
+      },
+      checked_at: Math.floor(Date.now() / 1000)
+    }, id);
+  } catch (e) {
+    return fail("HEALTHCHECK_FAILED", String(e), id, 503);
+  }
+}
+
+/**
+ * Fully stateless "how much of my locked-up MWC can I claim right now" check.
+ *
+ * There's no ledger — "owed" here means the same thing /api/locks/:pubkey reports per lock
+ * (funded + already past its unlock time), just summed across every unlock_time the caller
+ * asks about. The wallet supplies the candidate unlock_times it created (it already knows
+ * them), and this recomputes + checks each address live, exactly like /api/locks/:pubkey.
+ *
+ * GET /api/owed/:pubkey?unlock_times=1780000000,850000
+ * (values are auto-detected as height vs. unix time using the same BIP65 500,000,000
+ * threshold Bitcoin/MWC use to interpret CLTV lock values, so no separate lock_type param
+ * is needed here.)
+ */
 export async function owed(c: Context<AppEnv>) {
   const id = c.get("requestId");
   const rawPubkey = c.req.param("pubkey");
@@ -162,188 +238,56 @@ export async function owed(c: Context<AppEnv>) {
   if (!validHex(pubkey, 33) && !validHex(pubkey, 65)) {
     return fail("INVALID_PUBKEY", "Public key must be 33 or 65 bytes of hex.", id);
   }
-  const rows = await c.env.DB.prepare(
-    `SELECT kind, amount_atomic FROM ledger_entries WHERE pubkey = ? ORDER BY created_at ASC`
-  ).bind(pubkey).all<any>();
-  let earned = 0n;
-  let settled = 0n;
-  for (const row of rows.results) {
-    const amount = BigInt(String(row.amount_atomic));
-    if (row.kind === "earned" || row.kind === "adjustment") earned += amount;
-    if (row.kind === "settled") settled += amount;
+
+  const CLTV_TIME_THRESHOLD = 500000000; // BIP65: values below this are a block height, at/above it a unix time
+  const raw = c.req.query("unlock_times") ?? "";
+  const unlockTimes = [...new Set(
+    raw.split(",").map(s => Number.parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff)
+  )];
+  if (unlockTimes.length === 0) {
+    return fail("INVALID_UNLOCK_TIMES", "Query param unlock_times is required: a comma-separated list of the unlock times used when you created your locks.", id);
   }
-  const owed = earned - settled;
-  return ok({
-    pubkey,
-    earned_atomic: earned.toString(),
-    settled_atomic: settled.toString(),
-    owed_atomic: owed.toString(),
-    owed_mwc: mwcStringFromAtomic(owed)
-  }, id);
-}
+  if (unlockTimes.length > 50) {
+    return fail("TOO_MANY_UNLOCK_TIMES", "Provide at most 50 unlock_times per request.", id);
+  }
 
-export async function ledgerincome(c: Context<AppEnv>) {
-  const id = c.get("requestId");
-  const settings = await c.env.DB.prepare(
-    `SELECT key,value FROM settings WHERE key IN ('ledger_earned_atomic','ledger_allocated_atomic','ledger_settled_atomic','treasury_balance_atomic')`
-  ).all<any>();
-  const map = new Map(settings.results.map((row: any) => [row.key, String(row.value)]));
-  const earned = BigInt(map.get("ledger_earned_atomic") ?? "0");
-  const allocated = BigInt(map.get("ledger_allocated_atomic") ?? "0");
-  const settled = BigInt(map.get("ledger_settled_atomic") ?? "0");
-  const treasuryBalance = BigInt(map.get("treasury_balance_atomic") ?? "0");
-  const outstanding = earned > settled ? earned - settled : 0n;
-  return ok({
-    earned_atomic: earned.toString(),
-    allocated_atomic: allocated.toString(),
-    settled_atomic: settled.toString(),
-    outstanding_atomic: outstanding.toString(),
-    treasury_balance_atomic: treasuryBalance.toString(),
-    solvent: treasuryBalance >= outstanding
-  }, id);
-}
-
-export async function healthsync(c: Context<AppEnv>) {
-  const id = c.get("requestId");
   try {
-    const [info, workers, ledger] = await Promise.all([
-      getOriginalJson<any>(c.env, "/info"),
-      c.env.DB.prepare(`SELECT worker_id,status,last_seen FROM worker_heartbeats ORDER BY last_seen DESC LIMIT 25`).all(),
-      c.env.DB.prepare(`SELECT value FROM settings WHERE key='treasury_balance_atomic'`).first<any>()
-    ]);
-    const lastSeen = workers.results.length ? Math.max(...workers.results.map((x: any) => Number(x.last_seen))) : 0;
-    const workersHealthy = workers.results.length > 0 && (now() - lastSeen) <= 900;
+    const info = await getOriginalJson<any>(c.env, "/info");
+    const height = Number(info.blocks ?? info.height ?? 0);
+    const medianTime = Number(info.mediantime ?? 0);
+
+    const results = await Promise.all(unlockTimes.map(async (unlockTime) => {
+      const lockType = unlockTime >= CLTV_TIME_THRESHOLD ? "time" : "height";
+      const tip = lockType === "time" ? medianTime : height;
+      let derived: { redeemScriptHex: string; address: string };
+      try {
+        derived = cltvP2sh(unlockTime, pubkey);
+      } catch (e) {
+        return { unlock_time: unlockTime, lock_type: lockType, error: String(e) };
+      }
+      try {
+        const balanceData = await getOriginalJson<any>(c.env, `/balance/${encodeURIComponent(derived.address)}`);
+        const balanceAtomic = BigInt(atomicString(balanceData?.balance ?? balanceData?.confirmed ?? 0));
+        return {
+          unlock_time: unlockTime,
+          lock_type: lockType,
+          address: derived.address,
+          balance_atomic: balanceAtomic.toString(),
+          spendable_now: tip >= unlockTime && balanceAtomic > 0n
+        };
+      } catch (e) {
+        return { unlock_time: unlockTime, lock_type: lockType, address: derived.address, error: String(e) };
+      }
+    }));
+
+    const owedAtomic = results.reduce((sum, r: any) => sum + (r.spendable_now ? BigInt(r.balance_atomic) : 0n), 0n);
+
     return ok({
-      api: "ok",
-      chain: { height: info.blocks ?? info.height ?? null },
-      workers: { healthy: workersHealthy, entries: workers.results },
-      solvency: { treasury_balance_atomic: atomicString(ledger?.value ?? 0) },
-      checked_at: now()
+      pubkey,
+      owed_atomic: owedAtomic.toString(),
+      locks: results
     }, id);
   } catch (e) {
-    return fail("HEALTHCHECK_FAILED", String(e), id, 503);
+    return fail("UPSTREAM_ERROR", String(e), id, 502);
   }
-}
-
-/**
- * Public, non-custodial lock registration.
- *
- * There is deliberately NO admin key here. Anyone can call this endpoint, but it can't be
- * used to plant fake data because the server doesn't trust anything the caller says about
- * the lock — it recomputes the CLTV redeem script and P2SH address itself from (pubkey,
- * unlock_time) and only indexes the lock if:
- *   1. the recomputed script/address match what the caller claims, AND
- *   2. the original chain API shows that address actually holds real funds right now.
- * This just makes an already-public on-chain fact (a funded CLTV lock the user created
- * client-side and broadcast themselves) discoverable by pubkey. It never moves funds,
- * never requires a secret, and can't register a lock that doesn't really exist on-chain.
- */
-export async function registerLock(c: Context<AppEnv>) {
-  const id = c.get("requestId");
-  const body = await c.req.json<any>();
-  const { pubkey, unlock_time, lock_type } = body || {};
-
-  if ((!validHex(pubkey, 33) && !validHex(pubkey, 65)) ||
-      !Number.isInteger(unlock_time) || unlock_time < 0 || unlock_time > 0xffffffff ||
-      !["height", "time"].includes(lock_type)) {
-    return fail("INVALID_LOCK", "Invalid lock payload.", id);
-  }
-
-  let derived: { redeemScriptHex: string; address: string };
-  try {
-    derived = cltvP2sh(unlock_time, pubkey.toLowerCase());
-  } catch (e) {
-    return fail("INVALID_LOCK", `Could not derive lock address: ${String(e)}`, id);
-  }
-
-  // Proof of funds: the derived address must actually be funded on-chain before we'll index it.
-  let hasFunds = false;
-  try {
-    const balance = await getOriginalJson<any>(c.env, `/balance/${encodeURIComponent(derived.address)}`);
-    hasFunds = Number(balance?.balance ?? 0) > 0;
-  } catch (e) {
-    return fail("UPSTREAM_ERROR", `Could not verify lock address on-chain: ${String(e)}`, id, 502);
-  }
-  if (!hasFunds) {
-    return fail("LOCK_NOT_FUNDED", "That lock address has no on-chain balance yet. Broadcast the locking transaction first, then register it.", id, 409);
-  }
-
-  const lockId = crypto.randomUUID();
-  const timestamp = now();
-  await c.env.DB.prepare(`
-    INSERT INTO lock_watchers(id,pubkey,redeem_script_hex,address,unlock_time,lock_type,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?)
-    ON CONFLICT(pubkey,redeem_script_hex) DO UPDATE SET
-      address=excluded.address, unlock_time=excluded.unlock_time,
-      lock_type=excluded.lock_type, updated_at=excluded.updated_at
-  `).bind(lockId, pubkey.toLowerCase(), derived.redeemScriptHex, derived.address, unlock_time, lock_type, timestamp, timestamp).run();
-
-  return ok({
-    registered: true,
-    pubkey: pubkey.toLowerCase(),
-    address: derived.address,
-    redeem_script_hex: derived.redeemScriptHex,
-    unlock_time,
-    lock_type
-  }, id);
-}
-
-export async function heartbeat(c: Context<AppEnv>) {
-  const id = c.get("requestId");
-  if (!(await requireAdmin(c.req.raw, c.env))) return fail("UNAUTHORIZED", "Admin authorization required.", id, 401);
-  const body = await c.req.json<any>();
-  if (!body?.worker_id || !body?.status) return fail("INVALID_HEARTBEAT", "worker_id and status are required.", id);
-  await c.env.DB.prepare(`
-    INSERT INTO worker_heartbeats(worker_id,status,details_json,last_seen)
-    VALUES(?,?,?,?)
-    ON CONFLICT(worker_id) DO UPDATE SET status=excluded.status, details_json=excluded.details_json, last_seen=excluded.last_seen
-  `).bind(String(body.worker_id), String(body.status), JSON.stringify(body.details ?? {}), now()).run();
-  return ok({ accepted: true, worker_id: String(body.worker_id) }, id);
-}
-
-export async function ledgerEntry(c: Context<AppEnv>) {
-  const id = c.get("requestId");
-  if (!(await requireAdmin(c.req.raw, c.env))) return fail("UNAUTHORIZED", "Admin authorization required.", id, 401);
-  const body = await c.req.json<any>();
-  if ((!validHex(body?.pubkey, 33) && !validHex(body?.pubkey, 65)) ||
-      !["earned","allocated","settled","adjustment"].includes(body?.kind) ||
-      !/^-?\d+$/.test(String(body?.amount_atomic ?? ""))) {
-    return fail("INVALID_LEDGER_ENTRY", "Invalid ledger entry.", id);
-  }
-  const entryId = crypto.randomUUID();
-  const amount = String(body.amount_atomic);
-  const key = body.kind === "settled"
-    ? "ledger_settled_atomic"
-    : body.kind === "allocated"
-      ? "ledger_allocated_atomic"
-      : "ledger_earned_atomic";
-  await c.env.DB.batch([
-    c.env.DB.prepare(`
-      INSERT INTO ledger_entries(id,pubkey,kind,amount_atomic,reference,metadata_json,created_at)
-      VALUES(?,?,?,?,?,?,?)
-    `).bind(
-      entryId, body.pubkey.toLowerCase(), body.kind, amount,
-      body.reference ?? null, JSON.stringify(body.metadata ?? {}), now()
-    ),
-    c.env.DB.prepare(`
-      UPDATE settings
-      SET value = CAST(CAST(value AS INTEGER) + CAST(? AS INTEGER) AS TEXT), updated_at = ?
-      WHERE key = ?
-    `).bind(amount, now(), key)
-  ]);
-  return ok({ accepted: true, id: entryId }, id);
-}
-
-export async function treasury(c: Context<AppEnv>) {
-  const id = c.get("requestId");
-  if (!(await requireAdmin(c.req.raw, c.env))) return fail("UNAUTHORIZED", "Admin authorization required.", id, 401);
-  const body = await c.req.json<any>();
-  if (!/^\d+$/.test(String(body?.balance_atomic ?? ""))) {
-    return fail("INVALID_BALANCE", "balance_atomic must be a non-negative safe integer.", id);
-  }
-  await c.env.DB.prepare(`
-    INSERT INTO settings(key,value,updated_at) VALUES('treasury_balance_atomic',?,?)
-    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
-  `).bind(String(body.balance_atomic), now()).run();
-  return ok({ updated: true, balance_atomic: String(body.balance_atomic) }, id);
 }

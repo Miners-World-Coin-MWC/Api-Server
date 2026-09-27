@@ -1,10 +1,7 @@
 import { Hono } from "hono";
-import type { AppEnv, Env } from "./types";
+import type { AppEnv } from "./types";
 import { requestId } from "./lib/response";
-import {
-  nodechain, paramschain, minimum, ledgerincome, healthsync,
-  balance, history, locks, owed, registerLock, heartbeat, ledgerEntry, treasury
-} from "./routes/newApi";
+import { nodechain, paramschain, minimum, healthsync, balance, history, locks, owed } from "./routes/newApi";
 import { proxy } from "./routes/proxy";
 
 const app = new Hono<AppEnv>();
@@ -24,34 +21,20 @@ app.use("*", async (c, next) => {
 
 app.options("*", c => new Response(null, { status: 204 }));
 
+// Everything below is stateless: no database, no admin key, nothing running except this
+// Worker. Lock lookups recompute addresses from (pubkey, unlock_time) on demand and check
+// the original chain API live — there's nothing to register or store.
 app.get("/api/nodechain", nodechain);
 app.get("/api/paramschain", paramschain);
 app.get("/api/minimum", minimum);
-app.get("/api/ledgerincome", ledgerincome);
 app.get("/api/healthsync", healthsync);
 app.get("/api/balance/:address", balance);
 app.get("/api/history/:address", history);
 app.get("/api/locks/:pubkey", locks);
 app.get("/api/owed/:pubkey", owed);
 
-// Public: no admin key. Anyone can register their own lock; the handler verifies it
-// on-chain itself before indexing (see routes/newApi.ts for why this is safe).
-app.post("/api/locks/register", registerLock);
-
-app.post("/api/admin/workers/heartbeat", heartbeat);
-app.post("/api/admin/ledger/entry", ledgerEntry);
-app.post("/api/admin/treasury", treasury);
-
 app.all("*", proxy);
 
 export default {
-  fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(
-      env.DB.prepare(`INSERT INTO health_events(id,component,status,details_json,created_at) VALUES(?,?,?,?,?)`)
-        .bind(crypto.randomUUID(), "cron", "ok", JSON.stringify({ ran_at: Math.floor(Date.now()/1000) }), Math.floor(Date.now()/1000))
-        .run()
-        .catch(() => undefined)
-    );
-  }
+  fetch: app.fetch
 };

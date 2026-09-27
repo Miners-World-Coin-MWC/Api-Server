@@ -10,8 +10,7 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "deploy": "node scripts/deploy.mjs",
-    "generate-wrangler": "node scripts/generate-wrangler.mjs"
+    "deploy": "node scripts/deploy.mjs"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.4.3",

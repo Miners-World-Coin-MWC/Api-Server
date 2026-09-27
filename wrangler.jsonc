@@ -8,21 +8,11 @@
   "routes": [
     { "pattern": "api2.minersworld.org", "custom_domain": true }
   ],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "minersworld_api",
-      "database_id": "LOCAL_D1_DATABASE_ID"
-    }
-  ],
   "vars": {
     "ORIGINAL_API_URL": "https://api.minersworld.org",
     "CHAIN": "mainnet",
     "CORS_ORIGIN": "*",
     "MWC_DECIMALS": "8",
     "MWC_MIN_LOCK_SECONDS": "0"
-  },
-  "triggers": {
-    "crons": ["*/5 * * * *"]
   }
 }

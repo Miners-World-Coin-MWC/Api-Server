@@ -1,11 +1,9 @@
 export interface Env {
-  DB: D1Database;
   ORIGINAL_API_URL: string;
   CHAIN: string;
   CORS_ORIGIN: string;
   MWC_DECIMALS: string;
   MWC_MIN_LOCK_SECONDS: string;
-  ADMIN_API_KEY?: string;
   BROADCAST_API_KEY?: string;
 }
 
