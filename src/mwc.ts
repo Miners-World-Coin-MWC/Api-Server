@@ -140,7 +140,7 @@ const ECPair = ECPairFactory(ecc);
 export function signTransaction(psbt: bitcoin.Psbt, privateKeysWif: string[]) {
   for (const wif of privateKeysWif) {
     const key = ECPair.fromWIF(wif, MWC_NETWORK);
-    psbt.signAllInputs(key);
+    psbt.signAllInputs(key as unknown as bitcoin.Signer);
   }
   psbt.finalizeAllInputs();
   return psbt.extractTransaction().toHex();
@@ -214,9 +214,9 @@ export function buildCltvSpend(
 
 /** Sign and finalize a CLTV spend: scriptSig = <signature> <redeemScript>. */
 export function signCltvSpend(psbt: bitcoin.Psbt, wif: string): string {
-  psbt.signAllInputs(ECPair.fromWIF(wif, MWC_NETWORK));
+  psbt.signAllInputs(ECPair.fromWIF(wif, MWC_NETWORK) as unknown as bitcoin.Signer);
   psbt.data.inputs.forEach((_input, i) => {
-    psbt.finalizeInput(i, (_idx, input) => ({
+    psbt.finalizeInput(i, (_idx: number, input: any) => ({
       finalScriptSig: bitcoin.script.compile([input.partialSig![0].signature, input.redeemScript!]),
       finalScriptWitness: undefined
     }));
