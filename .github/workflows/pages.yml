@@ -30,8 +30,11 @@ jobs:
       - name: Fetch MWC bitcoinjs-lib
         run: npm run fetch-bitcoinjs
 
+      - name: Install dependencies
+        run: npm install
+
       - name: Build static site
-        run: npm run build
+        run: npm run fetch-bitcoinjs && npm run build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

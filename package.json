@@ -1,16 +1,11 @@
 {
-  "name": "@miners-world-coin/mwc-wallet-api",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Non-custodial Miners World Coin wallet/API SDK for GitHub Pages",
-  "type": "module",
-  "scripts": {
-    "build": "node scripts/build.mjs",
-    "test": "node --test",
-    "dev": "python3 -m http.server 8080 -d dist",
-    "fetch-bitcoinjs": "node scripts/fetch-bitcoinjs.mjs"
-  },
-  "engines": {
-    "node": ">=20"
-  }
+  "name":"@miners-world-coin/mwc-wallet-suite",
+  "version":"1.0.0",
+  "private":true,
+  "description":"Miners World Coin production wallet and stateless API facade",
+  "type":"module",
+  "scripts":{"build":"vite build","dev":"vite --host 0.0.0.0","fetch-bitcoinjs":"node scripts/fetch-bitcoinjs.mjs","test":"node --test"},
+  "engines":{"node":">=20"},
+  "dependencies":{"bip32":"^5.0.0","bip39":"^3.1.0","tiny-secp256k1":"^2.2.3"},
+  "devDependencies":{"vite":"^7.1.7"}
 }

@@ -1,35 +1,11 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MWC Wallet API</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; background:#0b0e11; color:#eee; }
-    code, pre { background:#151a1f; padding:12px; border-radius:8px; overflow:auto; }
-    h1 { color:#ffd966; }
-    .ok { color:#7ee787; }
-    button { padding:10px 14px; cursor:pointer; }
-  </style>
-</head>
-<body>
-  <h1>Miners World Coin — Wallet API</h1>
-  <p>Non-custodial, database-free, GitHub-hosted wallet SDK.</p>
-  <button id="check">Check MWC API</button>
-  <pre id="output">Ready.</pre>
-
-  <script type="module">
-    const output = document.querySelector("#output");
-    document.querySelector("#check").addEventListener("click", async () => {
-      output.textContent = "Checking...";
-      try {
-        const response = await fetch("https://api.minersworld.org/info");
-        const json = await response.json();
-        output.textContent = JSON.stringify(json, null, 2);
-      } catch (error) {
-        output.textContent = String(error);
-      }
-    });
-  </script>
-</body>
-</html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Miners World Coin Wallet</title><style>
+:root{--bg:#0b0e11;--panel:#10171a;--line:#1e6f73;--gold:#ffd966;--text:#eef3f3;--muted:#9fb0b0}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,sans-serif}main{max-width:1180px;margin:auto;padding:28px 18px 60px}h1{color:var(--gold);margin-bottom:4px}h2{margin:0 0 12px}section{background:var(--panel);border:1px solid #173d3f;border-radius:14px;padding:18px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}input,textarea{width:100%;background:#080c0e;color:var(--text);border:1px solid #31575a;border-radius:8px;padding:10px;margin:5px 0}textarea{min-height:110px;font-family:ui-monospace,monospace}button{background:#e6b85c;color:#0b0e11;border:0;border-radius:8px;padding:10px 14px;margin:5px 3px;font-weight:700;cursor:pointer}button.alt{background:#1e6f73;color:#fff}.muted{color:var(--muted)}.address{font-family:monospace;word-break:break-all;color:#ffd966}.status{color:#9fe7e7}pre{white-space:pre-wrap;word-break:break-word;background:#050708;border:1px solid #172528;border-radius:10px;padding:14px;min-height:160px}.danger{color:#ffb4b4}</style></head><body><main>
+<h1>Miners World Coin Wallet</h1><div class="muted">Non-custodial • keys stay local • no database • no Cloudflare • no API keys for broadcast</div>
+<section><h2>Create / Import</h2><div class="grid"><div><button id="createWallet">Create new wallet</button><label>Mnemonic</label><textarea id="mnemonic" placeholder="12/24-word BIP39 mnemonic"></textarea><button id="importMnemonic">Import mnemonic</button></div><div><label>WIF</label><input id="wif"><button id="importWif">Import WIF</button><label>Private key (hex)</label><input id="privateHex"><button id="importPrivate">Import private key</button></div><div><label>Extended private key (xprv)</label><input id="xprv"><button id="importXprv">Import xprv</button><label>Extended public key (xpub)</label><input id="xpub"><button id="importXpub">Watch xpub</button></div></div><p>Address: <span id="walletAddress" class="address">—</span></p><input id="walletWif" readonly placeholder="active WIF"><input id="walletPub" readonly placeholder="public key"><div class="muted">Derivation: <span id="walletPath">—</span></div></section>
+<section><h2>Balance / History</h2><input id="watchAddress" placeholder="MWC address"><button id="checkBalance">Balance + UTXOs</button><button id="history" class="alt">History</button><button id="node" class="alt">Node status</button><button id="params" class="alt">Chain params</button><button id="fee" class="alt">Fee</button></section>
+<section><h2>Send MWC</h2><div class="grid"><div><label>Recipient</label><input id="sendTo"><label>Amount MWC</label><input id="sendAmount" type="number" step="0.00000001"><label>Fee MWC</label><input id="sendFee" type="number" step="0.00000001" value="0.01"></div><div><p class="muted">Refresh Balance + UTXOs first. Signing happens locally.</p><button id="send">Build + sign transaction</button><button id="broadcast" class="alt">Broadcast signed raw transaction</button><textarea id="rawTx" placeholder="Signed raw transaction"></textarea></div></div></section>
+<section><h2>Custom MWC address</h2><p class="muted">Generate a normal MWC private key whose Base58 address begins with your chosen 1–6 character prefix. This is local CPU work.</p><input id="vanityPrefix" maxlength="6" placeholder="e.g. MWC"><button id="vanity">Generate vanity address</button><span id="vanityStatus" class="status"></span></section>
+<section><h2>CLTV time lock</h2><p class="muted">Script: &lt;unlock-time&gt; OP_CHECKLOCKTIMEVERIFY OP_DROP &lt;their pubkey&gt; OP_CHECKSIG</p><div class="grid"><div><label>Unlock time / height</label><input id="unlockTime" type="number"><label>Public key hex</label><input id="lockPub" placeholder="compressed 33-byte public key"><button id="makeCltv">Create lock address</button></div><div><label>Redeem script</label><textarea id="cltvScript" readonly></textarea><label>P2SH lock address</label><input id="cltvAddress" readonly><label>Amount MWC</label><input id="lockAmount" type="number" step="0.00000001"><label>Fee MWC</label><input id="lockFee" type="number" step="0.00000001" value="0.01"><button id="lockFunds">Build + sign lock transaction</button></div></div></section>
+<section><h2>Encrypted backup</h2><input id="backupPassword" type="password" placeholder="Strong backup password (12+ chars)"><button id="exportBackup">Export encrypted backup</button><p class="danger">The app never sends your mnemonic/private key/WIF/xprv to the MWC API.</p></section>
+<section><h2>Diagnostics</h2><pre id="output">Loading…</pre></section>
+</main><script src="./vendor/bitcoinJS-lib.js"></script><script type="module" src="./src/wallet-app.js"></script></body></html>
