@@ -225,14 +225,41 @@ $('broadcast').onclick = guard(async () => {
 }, 'Broadcast');
 
 // ---------- vanity ----------
+// ---------- vanity ----------
+const BASE58_RE = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]*$/;
+function normalizedVanityInput() {
+  let typed = $('vanityPrefix').value.trim();
+  if (typed.startsWith('9')) typed = typed.slice(1); // the mandatory leading 9 doesn't count against the limit
+  return typed;
+}
+function formatDuration(seconds) {
+  if (seconds < 60) return `${seconds.toFixed(0)}s`;
+  if (seconds < 3600) return `${(seconds / 60).toFixed(1)} min`;
+  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} hours`;
+  return `${(seconds / 86400).toFixed(1)} days`;
+}
+const ASSUMED_ATTEMPTS_PER_SECOND = 60000; // rough single-threaded baseline until we measure the real rate
+function updateVanityDifficulty() {
+  const typed = normalizedVanityInput();
+  const el = $('vanityDifficulty');
+  if (!typed) { el.textContent = 'Target: 9 — type a prefix to see the expected number of attempts.'; return; }
+  if (!BASE58_RE.test(typed)) { el.textContent = 'Contains characters that are not valid Base58.'; return; }
+  const expected = Math.pow(58, typed.length);
+  const eta = formatDuration(expected / ASSUMED_ATTEMPTS_PER_SECOND);
+  el.textContent = `Target: 9${typed} — average of ~${expected.toLocaleString(undefined, { maximumFractionDigits: 0 })} attempts, roughly ${eta} on this device (varies with luck and CPU speed).`;
+}
+$('vanityPrefix').addEventListener('input', updateVanityDifficulty);
+updateVanityDifficulty();
+
 $('vanity').onclick = () => {
-  let wanted = $('vanityPrefix').value.trim();
-  if (wanted && !wanted.startsWith('9')) wanted = '9' + wanted; // MWC addresses always start with 9 (version byte 20)
+  const typed = normalizedVanityInput();
   const maxLen = CLTV.maxVanityPrefixLength;
-  if (!/^9[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{0,9}$/.test(wanted) || wanted.length > maxLen) {
-    toast(`Prefix must start with 9 and be at most ${maxLen} Base58 characters total.`, 'bad'); return;
-  }
-  $('vanityPrefix').value = wanted;
+  if (!typed) { toast('Type at least one character after the 9.', 'bad'); return; }
+  if (typed.length > maxLen) { toast(`At most ${maxLen} characters after the 9.`, 'bad'); return; }
+  if (!BASE58_RE.test(typed)) { toast('Prefix contains characters that are not valid Base58.', 'bad'); return; }
+  const wanted = '9' + typed;
+  $('vanityPrefix').value = typed;
+  const expected = Math.pow(58, typed.length);
   vanityRunning = true;
   $('vanity').disabled = true;
   $('vanityStop').style.display = '';
@@ -257,7 +284,9 @@ $('vanity').onclick = () => {
         return;
       }
     }
-    $('vanityStatus').textContent = `${attempts.toLocaleString()} attempts, ${((performance.now() - start) / 1000).toFixed(1)}s elapsed`;
+    const elapsed = (performance.now() - start) / 1000;
+    const rate = attempts / elapsed;
+    $('vanityStatus').textContent = `${attempts.toLocaleString()} attempts (~${(attempts / expected * 100).toFixed(1)}% of the average) · ${elapsed.toFixed(1)}s elapsed · ${Math.round(rate).toLocaleString()} attempts/sec · est. ${formatDuration(expected / rate)} on average at this rate`;
     setTimeout(step, 0);
   })();
 };
