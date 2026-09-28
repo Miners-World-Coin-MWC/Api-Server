@@ -20,8 +20,11 @@ function randomPrivateKey(): Uint8Array {
 export function validateVanityPrefix(prefix: string): string {
   const normalized = prefix.trim();
   if (!normalized) throw new Error("Vanity prefix cannot be empty.");
+  if (!normalized.startsWith("9")) {
+    throw new Error("MWC addresses always start with 9 (pubKeyHash version byte 20) — the prefix must start with 9.");
+  }
   if (normalized.length > CLTV.maxVanityPrefixLength) {
-    throw new Error(`Vanity prefix cannot exceed ${CLTV.maxVanityPrefixLength} characters.`);
+    throw new Error(`Vanity prefix cannot exceed ${CLTV.maxVanityPrefixLength} characters (including the leading 9).`);
   }
   if (!/^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/.test(normalized)) {
     throw new Error("Vanity prefix contains characters that are not valid Base58 characters.");

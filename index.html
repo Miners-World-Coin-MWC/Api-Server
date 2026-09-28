@@ -208,8 +208,8 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:40px}
 <section class="tab" data-tab="vanity">
   <div class="card">
     <h3>🎯 Custom (vanity) address</h3>
-    <p class="hint">Generates a normal MWC private key whose address starts with your prefix. Runs locally in this tab — longer prefixes take a lot longer.</p>
-    <label>Prefix (1–6 Base58 characters)</label><input id="vanityPrefix" maxlength="6" placeholder="e.g. MWC">
+    <p class="hint">Generates a normal MWC private key whose address starts with your prefix. MWC addresses always start with <b>9</b> — it's added automatically if you don't type it. Up to 10 characters total. Runs locally in this tab; longer prefixes take a lot longer.</p>
+    <label>Prefix (starts with 9, up to 10 Base58 characters)</label><input id="vanityPrefix" maxlength="10" placeholder="e.g. 9MWC or 9BuRnW4L73">
     <div class="row"><button class="btn" id="vanity">Generate</button><button class="btn danger" id="vanityStop" style="display:none">Stop</button></div>
     <div class="progress indeterminate" id="vanityBar" style="display:none"><i></i></div>
     <p class="hint" id="vanityStatus"></p>

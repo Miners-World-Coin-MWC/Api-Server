@@ -26,6 +26,6 @@ export const MWC_CHAIN = Object.freeze({
 
 export const CLTV = Object.freeze({
   opcodeName: "OP_CHECKLOCKTIMEVERIFY",
-  maxVanityPrefixLength: 6,
+  maxVanityPrefixLength: 10,
   nonFinalSequence: 0xfffffffe
 } as const);

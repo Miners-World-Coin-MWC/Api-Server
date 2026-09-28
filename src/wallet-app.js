@@ -226,10 +226,13 @@ $('broadcast').onclick = guard(async () => {
 
 // ---------- vanity ----------
 $('vanity').onclick = () => {
-  const wanted = $('vanityPrefix').value.trim();
-  if (!/^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{1,6}$/.test(wanted)) {
-    toast('Vanity prefix must be 1-6 Base58 characters.', 'bad'); return;
+  let wanted = $('vanityPrefix').value.trim();
+  if (wanted && !wanted.startsWith('9')) wanted = '9' + wanted; // MWC addresses always start with 9 (version byte 20)
+  const maxLen = CLTV.maxVanityPrefixLength;
+  if (!/^9[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{0,9}$/.test(wanted) || wanted.length > maxLen) {
+    toast(`Prefix must start with 9 and be at most ${maxLen} Base58 characters total.`, 'bad'); return;
   }
+  $('vanityPrefix').value = wanted;
   vanityRunning = true;
   $('vanity').disabled = true;
   $('vanityStop').style.display = '';

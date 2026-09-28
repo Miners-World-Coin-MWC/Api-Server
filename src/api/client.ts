@@ -15,7 +15,9 @@ export class MwcApiError extends Error {
 export class MWCAPIClient {
   constructor(
     public readonly baseUrl: string = MWC_API_BASE,
-    private readonly fetchImpl: typeof fetch = fetch
+    // Bound to globalThis: bare `fetch` requires `this === window`, and calling it as
+    // `this.fetchImpl(...)` (an object method) breaks that and throws "Illegal invocation".
+    private readonly fetchImpl: typeof fetch = fetch.bind(globalThis)
   ) {}
 
   private async request<T>(
