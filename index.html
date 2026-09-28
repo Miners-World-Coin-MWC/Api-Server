@@ -1,11 +1,286 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Miners World Coin Wallet</title><style>
-:root{--bg:#0b0e11;--panel:#10171a;--line:#1e6f73;--gold:#ffd966;--text:#eef3f3;--muted:#9fb0b0}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,sans-serif}main{max-width:1180px;margin:auto;padding:28px 18px 60px}h1{color:var(--gold);margin-bottom:4px}h2{margin:0 0 12px}section{background:var(--panel);border:1px solid #173d3f;border-radius:14px;padding:18px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}input,textarea{width:100%;background:#080c0e;color:var(--text);border:1px solid #31575a;border-radius:8px;padding:10px;margin:5px 0}textarea{min-height:110px;font-family:ui-monospace,monospace}button{background:#e6b85c;color:#0b0e11;border:0;border-radius:8px;padding:10px 14px;margin:5px 3px;font-weight:700;cursor:pointer}button.alt{background:#1e6f73;color:#fff}.muted{color:var(--muted)}.address{font-family:monospace;word-break:break-all;color:#ffd966}.status{color:#9fe7e7}pre{white-space:pre-wrap;word-break:break-word;background:#050708;border:1px solid #172528;border-radius:10px;padding:14px;min-height:160px}.danger{color:#ffb4b4}</style></head><body><main>
-<h1>Miners World Coin Wallet</h1><div class="muted">Non-custodial • keys stay local • no database • no Cloudflare • no API keys for broadcast</div>
-<section><h2>Create / Import</h2><div class="grid"><div><button id="createWallet">Create new wallet</button><label>Mnemonic</label><textarea id="mnemonic" placeholder="12/24-word BIP39 mnemonic"></textarea><button id="importMnemonic">Import mnemonic</button></div><div><label>WIF</label><input id="wif"><button id="importWif">Import WIF</button><label>Private key (hex)</label><input id="privateHex"><button id="importPrivate">Import private key</button></div><div><label>Extended private key (xprv)</label><input id="xprv"><button id="importXprv">Import xprv</button><label>Extended public key (xpub)</label><input id="xpub"><button id="importXpub">Watch xpub</button></div></div><p>Address: <span id="walletAddress" class="address">—</span></p><input id="walletWif" readonly placeholder="active WIF"><input id="walletPub" readonly placeholder="public key"><div class="muted">Derivation: <span id="walletPath">—</span></div></section>
-<section><h2>Balance / History</h2><input id="watchAddress" placeholder="MWC address"><button id="checkBalance">Balance + UTXOs</button><button id="history" class="alt">History</button><button id="node" class="alt">Node status</button><button id="params" class="alt">Chain params</button><button id="fee" class="alt">Fee</button></section>
-<section><h2>Send MWC</h2><div class="grid"><div><label>Recipient</label><input id="sendTo"><label>Amount MWC</label><input id="sendAmount" type="number" step="0.00000001"><label>Fee MWC</label><input id="sendFee" type="number" step="0.00000001" value="0.01"></div><div><p class="muted">Refresh Balance + UTXOs first. Signing happens locally.</p><button id="send">Build + sign transaction</button><button id="broadcast" class="alt">Broadcast signed raw transaction</button><textarea id="rawTx" placeholder="Signed raw transaction"></textarea></div></div></section>
-<section><h2>Custom MWC address</h2><p class="muted">Generate a normal MWC private key whose Base58 address begins with your chosen 1–6 character prefix. This is local CPU work.</p><input id="vanityPrefix" maxlength="6" placeholder="e.g. MWC"><button id="vanity">Generate vanity address</button><span id="vanityStatus" class="status"></span></section>
-<section><h2>CLTV time lock</h2><p class="muted">Script: &lt;unlock-time&gt; OP_CHECKLOCKTIMEVERIFY OP_DROP &lt;their pubkey&gt; OP_CHECKSIG</p><div class="grid"><div><label>Unlock time / height</label><input id="unlockTime" type="number"><label>Public key hex</label><input id="lockPub" placeholder="compressed 33-byte public key"><button id="makeCltv">Create lock address</button></div><div><label>Redeem script</label><textarea id="cltvScript" readonly></textarea><label>P2SH lock address</label><input id="cltvAddress" readonly><label>Amount MWC</label><input id="lockAmount" type="number" step="0.00000001"><label>Fee MWC</label><input id="lockFee" type="number" step="0.00000001" value="0.01"><button id="lockFunds">Build + sign lock transaction</button></div></div></section>
-<section><h2>Encrypted backup</h2><input id="backupPassword" type="password" placeholder="Strong backup password (12+ chars)"><button id="exportBackup">Export encrypted backup</button><p class="danger">The app never sends your mnemonic/private key/WIF/xprv to the MWC API.</p></section>
-<section><h2>Diagnostics</h2><pre id="output">Loading…</pre></section>
-</main><script type="module" src="./vendor/bitcoinJS-lib.js"></script><script type="module" src="./src/wallet-app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Miners World Coin Wallet</title>
+<style>
+:root{--bg:#0b0e11;--panel:#10171a;--panel2:#0d1315;--line:#1e3a3c;--gold:#ffd966;--teal:#2fb4b8;--text:#eef3f3;--muted:#8ea3a3;--good:#4fd39a;--bad:#ff8a8a;--radius:14px}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 20% -10%,#12292b 0%,var(--bg) 45%);color:var(--text);font:15px/1.5 system-ui,-apple-system,sans-serif;min-height:100vh}
+main{max-width:1180px;margin:auto;padding:22px 16px 80px}
+
+/* header */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand .coin{width:38px;height:38px;border-radius:50%;background:conic-gradient(from 210deg,var(--gold),#ffb347,var(--gold));display:flex;align-items:center;justify-content:center;font-weight:800;color:#20140a}
+.brand h1{margin:0;font-size:19px}
+.brand .sub{color:var(--muted);font-size:12.5px;margin-top:1px}
+.walletchip{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:8px 14px}
+.walletchip .dot{width:8px;height:8px;border-radius:50%;background:#3a4a4a}
+.walletchip.active .dot{background:var(--good);box-shadow:0 0 8px var(--good)}
+.walletchip .addr{font-family:ui-monospace,monospace;font-size:13px;color:var(--gold)}
+.walletchip .bal{font-size:12.5px;color:var(--muted)}
+.walletchip button{background:none;border:0;color:var(--muted);cursor:pointer;padding:2px 4px;font-size:14px}
+.walletchip button:hover{color:var(--text)}
+
+/* tabs */
+nav.tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+nav.tabs button{flex:0 0 auto;background:transparent;border:0;color:var(--muted);padding:10px 14px;border-radius:10px 10px 0 0;cursor:pointer;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap}
+nav.tabs button:hover{color:var(--text);background:#ffffff08}
+nav.tabs button.active{color:var(--gold);background:var(--panel);box-shadow:inset 0 -3px 0 var(--gold)}
+
+/* panels */
+.tab{display:none;animation:fade .18s ease}
+.tab.active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.cardgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+.card h3{margin:0 0 4px;font-size:15px;display:flex;align-items:center;gap:8px}
+.card .hint{color:var(--muted);font-size:12.5px;margin:0 0 12px}
+label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px}
+input,textarea,select{width:100%;background:var(--panel2);color:var(--text);border:1px solid #274142;border-radius:8px;padding:10px;font:inherit}
+textarea{min-height:88px;font-family:ui-monospace,monospace;font-size:13px}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--teal);border-color:transparent}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button.btn{background:linear-gradient(180deg,#ffe08a,var(--gold));color:#20140a;border:0;border-radius:9px;padding:10px 16px;font-weight:700;cursor:pointer;font-size:13.5px}
+button.btn:hover{filter:brightness(1.05)}
+button.btn:disabled{opacity:.5;cursor:wait}
+button.btn.alt{background:#173d3f;color:#d9f5f5}
+button.btn.danger{background:#3a1616;color:#ffb4b4}
+button.icon{background:none;border:1px solid var(--line);color:var(--muted);border-radius:7px;padding:5px 8px;cursor:pointer;font-size:12px}
+button.icon:hover{color:var(--text);border-color:var(--teal)}
+
+/* result stat rows */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.stat .k{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+.stat .v{font-size:16px;font-weight:700;color:var(--gold);word-break:break-word}
+.kv{margin-top:12px;font-size:13px}
+.kv div{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed #1c3335}
+.kv div:last-child{border-bottom:0}
+.kv .k{color:var(--muted)}
+.kv .v{font-family:ui-monospace,monospace;text-align:right;word-break:break-all}
+.mono{font-family:ui-monospace,monospace;word-break:break-all}
+
+.list{margin-top:12px;display:flex;flex-direction:column;gap:8px;max-height:360px;overflow:auto}
+.list .item{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:13px}
+.list .item .top{display:flex;justify-content:space-between;gap:8px}
+.badge{font-size:11px;padding:2px 8px;border-radius:999px;background:#1c3335;color:var(--teal)}
+.badge.good{background:#123b2c;color:var(--good)}
+.badge.wait{background:#3a2f16;color:#ffcf6a}
+
+.progress{height:6px;border-radius:4px;background:#122324;overflow:hidden;margin-top:10px}
+.progress i{display:block;height:100%;width:0;background:var(--teal);transition:width .15s}
+.progress.indeterminate i{width:30%;animation:slide 1.1s infinite ease-in-out}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+
+.banner{border:1px solid #3a2f16;background:#241d0d;color:#ffd98a;border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px}
+.banner.danger{border-color:#3a1616;background:#1f0f0f;color:#ffb4b4}
+.banner.ok{border-color:#123b2c;background:#0f1d17;color:var(--good)}
+
+/* toasts */
+#toasts{position:fixed;top:16px;right:16px;display:flex;flex-direction:column;gap:8px;z-index:50;max-width:340px}
+.toast{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--teal);border-radius:8px;padding:10px 14px;font-size:13px;box-shadow:0 6px 20px #0007;animation:in .2s ease}
+.toast.bad{border-left-color:var(--bad)}
+.toast.good{border-left-color:var(--good)}
+@keyframes in{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:none}}
+
+pre.raw{white-space:pre-wrap;word-break:break-word;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;max-height:420px;overflow:auto;font-size:12.5px;margin-top:12px}
+footer{color:var(--muted);font-size:12px;text-align:center;margin-top:40px}
+</style>
+</head>
+<body>
+<div id="toasts"></div>
+<main>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="coin">₥</div>
+    <div><h1>Miners World Coin Wallet</h1><div class="sub">Non-custodial • keys stay in this browser • no database • no Cloudflare • no API keys</div></div>
+  </div>
+  <div class="walletchip" id="walletChip">
+    <span class="dot"></span>
+    <span class="addr" id="chipAddress">No wallet loaded</span>
+    <span class="bal" id="chipBalance"></span>
+    <button id="chipCopy" title="Copy address">⧉</button>
+  </div>
+</div>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="wallet" class="active">🔑 Wallet</button>
+  <button data-tab="balance">📊 Balance &amp; History</button>
+  <button data-tab="send">💸 Send</button>
+  <button data-tab="vanity">🎯 Custom Address</button>
+  <button data-tab="lock">🔒 Time Lock</button>
+  <button data-tab="backup">💾 Backup</button>
+  <button data-tab="node">🛰 Node / API</button>
+  <button data-tab="log">📜 Activity</button>
+</nav>
+
+<!-- WALLET -->
+<section class="tab active" data-tab="wallet">
+  <div class="cardgrid">
+    <div class="card">
+      <h3>🧠 Mnemonic</h3>
+      <p class="hint">Generate a new 24-word BIP39 mnemonic, or import your own.</p>
+      <button class="btn" id="createWallet">Create new wallet</button>
+      <textarea id="mnemonic" placeholder="12/24-word BIP39 mnemonic"></textarea>
+      <div class="row"><button class="btn alt" id="importMnemonic">Import mnemonic</button></div>
+    </div>
+    <div class="card">
+      <h3>🔑 Private key</h3>
+      <p class="hint">Import an existing key directly.</p>
+      <label>WIF</label><input id="wif">
+      <div class="row"><button class="btn alt" id="importWif">Import WIF</button></div>
+      <label>Private key (hex)</label><input id="privateHex">
+      <div class="row"><button class="btn alt" id="importPrivate">Import hex key</button></div>
+    </div>
+    <div class="card">
+      <h3>🌱 Extended keys</h3>
+      <p class="hint">Import an xprv, or watch an xpub read-only.</p>
+      <label>xprv</label><input id="xprv">
+      <div class="row"><button class="btn alt" id="importXprv">Import xprv</button></div>
+      <label>xpub (watch-only)</label><input id="xpub">
+      <div class="row"><button class="btn alt" id="importXpub">Watch xpub</button></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h3>👛 Active wallet</h3>
+    <div class="banner" id="walletWarning">Nothing loaded yet — create or import a wallet above. Anything you create is <b>not</b> saved anywhere; back it up yourself.</div>
+    <div class="kv" id="walletDetails" style="display:none">
+      <div><span class="k">Address</span><span class="v mono" id="walletAddress">—</span> <button class="icon" data-copy="walletAddress">⧉</button></div>
+      <div><span class="k">Public key</span><span class="v mono" id="walletPub">—</span> <button class="icon" data-copy="walletPub">⧉</button></div>
+      <div><span class="k">Derivation</span><span class="v" id="walletPath">single-key</span></div>
+      <div><span class="k">WIF</span><span class="v mono" id="walletWif">hidden</span> <button class="icon" id="toggleWif">show</button> <button class="icon" data-copy="walletWif">⧉</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- BALANCE -->
+<section class="tab" data-tab="balance">
+  <div class="card">
+    <h3>📊 Balance &amp; UTXOs</h3>
+    <p class="hint">Defaults to your active wallet — or paste any address to watch it read-only.</p>
+    <label>Address</label><input id="watchAddress" placeholder="MWC address">
+    <div class="row">
+      <button class="btn" id="checkBalance">Refresh balance + UTXOs</button>
+      <button class="btn alt" id="history">Transaction history</button>
+    </div>
+    <div class="stats" id="balanceStats" style="display:none">
+      <div class="stat"><div class="k">Balance</div><div class="v" id="statBalance">0 MWC</div></div>
+      <div class="stat"><div class="k">Received</div><div class="v" id="statReceived">0 MWC</div></div>
+      <div class="stat"><div class="k">UTXOs</div><div class="v" id="statUtxos">0</div></div>
+      <div class="stat"><div class="k">Mempool tx</div><div class="v" id="statMempool">0</div></div>
+    </div>
+    <div class="list" id="historyList"></div>
+  </div>
+</section>
+
+<!-- SEND -->
+<section class="tab" data-tab="send">
+  <div class="cardgrid">
+    <div class="card">
+      <h3>💸 Build transaction</h3>
+      <p class="hint">Refresh balance on the previous tab first. Signing happens locally.</p>
+      <label>Recipient</label><input id="sendTo">
+      <label>Amount MWC</label><input id="sendAmount" type="number" step="0.00000001">
+      <label>Fee MWC</label><input id="sendFee" type="number" step="0.00000001" value="0.01">
+      <div class="row"><button class="btn" id="send">Build &amp; sign</button></div>
+      <div class="stats" id="sendStats" style="display:none">
+        <div class="stat"><div class="k">To</div><div class="v" id="sendStatTo" style="font-size:12px">—</div></div>
+        <div class="stat"><div class="k">Amount</div><div class="v" id="sendStatAmount">—</div></div>
+        <div class="stat"><div class="k">Fee</div><div class="v" id="sendStatFee">—</div></div>
+        <div class="stat"><div class="k">Change</div><div class="v" id="sendStatChange">—</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>📡 Broadcast</h3>
+      <p class="hint">Review the signed raw transaction, then send it to the network.</p>
+      <label>Signed raw transaction</label><textarea id="rawTx" placeholder="Signed raw transaction hex"></textarea>
+      <div class="row"><button class="btn alt" id="broadcast">Broadcast signed transaction</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- VANITY -->
+<section class="tab" data-tab="vanity">
+  <div class="card">
+    <h3>🎯 Custom (vanity) address</h3>
+    <p class="hint">Generates a normal MWC private key whose address starts with your prefix. Runs locally in this tab — longer prefixes take a lot longer.</p>
+    <label>Prefix (1–6 Base58 characters)</label><input id="vanityPrefix" maxlength="6" placeholder="e.g. MWC">
+    <div class="row"><button class="btn" id="vanity">Generate</button><button class="btn danger" id="vanityStop" style="display:none">Stop</button></div>
+    <div class="progress indeterminate" id="vanityBar" style="display:none"><i></i></div>
+    <p class="hint" id="vanityStatus"></p>
+    <div class="kv" id="vanityResult" style="display:none"></div>
+  </div>
+</section>
+
+<!-- LOCK -->
+<section class="tab" data-tab="lock">
+  <div class="cardgrid">
+    <div class="card">
+      <h3>🔒 Create lock address</h3>
+      <p class="hint">Script: <span class="mono">&lt;unlock-time&gt; OP_CHECKLOCKTIMEVERIFY OP_DROP &lt;pubkey&gt; OP_CHECKSIG</span></p>
+      <label>Unlock time (unix seconds, or block height)</label><input id="unlockTime" type="number">
+      <label>Public key hex (defaults to your active wallet)</label><input id="lockPub" placeholder="compressed 33-byte public key">
+      <div class="row"><button class="btn" id="makeCltv">Create lock address</button></div>
+      <div class="kv" id="cltvDetails" style="display:none">
+        <div><span class="k">Redeem script</span><span class="v mono" id="cltvScriptOut">—</span></div>
+        <div><span class="k">P2SH address</span><span class="v mono" id="cltvAddressOut">—</span> <button class="icon" data-copy="cltvAddressOut">⧉</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>💰 Fund the lock</h3>
+      <p class="hint">Sends from your active wallet into the lock address above. Only spendable again after the unlock time.</p>
+      <label>Amount MWC</label><input id="lockAmount" type="number" step="0.00000001">
+      <label>Fee MWC</label><input id="lockFee" type="number" step="0.00000001" value="0.01">
+      <div class="row"><button class="btn" id="lockFunds">Build &amp; sign lock transaction</button></div>
+      <p class="hint">Copy the raw transaction from here into the Send tab to broadcast it.</p>
+    </div>
+  </div>
+</section>
+
+<!-- BACKUP -->
+<section class="tab" data-tab="backup">
+  <div class="card">
+    <h3>💾 Encrypted backup</h3>
+    <p class="hint">AES-256-GCM, PBKDF2 (310,000 iterations). The app never sends your mnemonic, private key, WIF or xprv to the API.</p>
+    <label>Backup password (12+ characters)</label><input id="backupPassword" type="password">
+    <div class="row"><button class="btn" id="exportBackup">Export encrypted backup</button></div>
+  </div>
+</section>
+
+<!-- NODE / API -->
+<section class="tab" data-tab="node">
+  <div class="card">
+    <h3>🛰 Node &amp; API</h3>
+    <div class="row">
+      <button class="btn alt" id="node">Node status</button>
+      <button class="btn alt" id="params">Chain params</button>
+      <button class="btn alt" id="fee">Fee</button>
+      <button class="btn alt" id="minimum">Minimum</button>
+      <button class="btn alt" id="healthsync">Health / sync</button>
+      <button class="btn alt" id="ledgerincome">Ledger income</button>
+    </div>
+    <pre class="raw" id="nodeOut">—</pre>
+  </div>
+</section>
+
+<!-- LOG -->
+<section class="tab" data-tab="log">
+  <div class="card">
+    <h3>📜 Activity log</h3>
+    <div class="row"><button class="btn alt" id="clearLog">Clear</button></div>
+    <pre class="raw" id="output">Loading…</pre>
+  </div>
+</section>
+
+<footer>PUBKEY 20 · SCRIPT 10 · WIF 123 · xpub 0488B21E · xprv 0488ADE4 · bech32 mwc</footer>
+</main>
+
+<script type="module" src="./vendor/bitcoinJS-lib.js"></script>
+<script type="module" src="./src/wallet-app.js"></script>
+</body>
+</html>
