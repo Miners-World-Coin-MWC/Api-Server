@@ -7,5 +7,5 @@
   "scripts":{"build":"vite build","dev":"vite --host 0.0.0.0","fetch-bitcoinjs":"node scripts/fetch-bitcoinjs.mjs","test":"node --test"},
   "engines":{"node":">=20"},
   "dependencies":{"bip32":"^5.0.0","bip39":"^3.1.0","tiny-secp256k1":"^2.2.3"},
-  "devDependencies":{"vite":"^7.1.7"}
+  "devDependencies":{"vite":"^6.0.0","vite-plugin-wasm":"^3.3.0"}
 }
