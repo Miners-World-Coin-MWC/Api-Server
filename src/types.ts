@@ -4,7 +4,8 @@ export interface Env {
   CORS_ORIGIN: string;
   MWC_DECIMALS: string;
   MWC_MIN_LOCK_SECONDS: string;
-  BROADCAST_API_KEY?: string;
+  INCOME_ADDRESS?: string;
+  ALLOCATION_ADDRESSES?: string;
 }
 
 export interface ApiEnvelope<T> {

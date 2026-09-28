@@ -6,13 +6,14 @@
   "type": "module",
   "workspaces": ["web-wallet"],
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "tsx watch src/server.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "deploy": "node scripts/deploy.mjs"
+    "start": "tsx src/server.ts"
   },
   "dependencies": {
+    "@hono/node-server": "^1.13.0",
     "@hono/zod-validator": "^0.4.3",
     "bip32": "^5.0.0",
     "bip39": "^3.1.0",
@@ -23,9 +24,9 @@
     "buffer": "^6.0.3"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.0.0",
+    "@types/node": "^22.0.0",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4",
-    "wrangler": "^4.38.0"
+    "tsx": "^4.19.0",
+    "vitest": "^3.2.4"
   }
 }

@@ -18,12 +18,6 @@ export async function proxy(c: Context<AppEnv>) {
   }
 
   if (path === "/broadcast" && c.req.method === "POST") {
-    if (c.env.BROADCAST_API_KEY) {
-      const supplied = c.req.header("x-mwc-broadcast-key") || "";
-      if (supplied !== c.env.BROADCAST_API_KEY) return new Response(JSON.stringify({ error: "unauthorized" }), {
-        status: 401, headers: { "content-type": "application/json" }
-      });
-    }
     return proxyOriginal(c.env, c.req.raw, path);
   }
 

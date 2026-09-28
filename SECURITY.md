@@ -14,17 +14,8 @@ They must never be:
 
 ## Broadcast endpoint
 
-The broadcast proxy is intentionally compatible with the original API.
-
-For production, add Cloudflare edge rate limiting/WAF rules to protect `/broadcast` against abuse.
-
-An optional Worker secret named `BROADCAST_API_KEY` is supported by the proxy. If it is set, clients must send:
-
-```text
-X-MWC-Broadcast-Key: <secret>
-```
-
-Do not expose this secret in a public web application if the public wallet needs unrestricted broadcasting. In that case, prefer Cloudflare edge rate limiting and abuse controls.
+`POST /broadcast` is proxied to the original API unchanged. There is no API key. If you expose
+the server publicly, put rate limiting in front of it (reverse proxy / host firewall).
 
 ## No admin surface, no database
 

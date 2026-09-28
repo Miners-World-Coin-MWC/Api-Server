@@ -145,3 +145,81 @@ export function signTransaction(psbt: bitcoin.Psbt, privateKeysWif: string[]) {
   psbt.finalizeAllInputs();
   return psbt.extractTransaction().toHex();
 }
+
+// ---------- wallets: WIF import, random, custom (vanity) ----------
+
+export interface WalletKey { wif: string; publicKeyHex: string; address: string; }
+
+function walletFromKeyPair(kp: { publicKey: Uint8Array; toWIF(): string }): WalletKey {
+  const pub = Buffer.from(kp.publicKey);
+  return {
+    wif: kp.toWIF(),
+    publicKeyHex: pub.toString("hex"),
+    address: bitcoin.payments.p2pkh({ pubkey: pub, network: MWC_NETWORK }).address!
+  };
+}
+
+/** Import a private key in WIF (MWC prefix 123). */
+export function walletFromWif(wif: string): WalletKey {
+  return walletFromKeyPair(ECPair.fromWIF(wif.trim(), MWC_NETWORK));
+}
+
+export function walletFromNode(node: { publicKey: Uint8Array; toWIF(): string }): WalletKey {
+  return walletFromKeyPair(node);
+}
+
+export function randomWallet(): WalletKey {
+  return walletFromKeyPair(ECPair.makeRandom({ network: MWC_NETWORK }));
+}
+
+/** MWC P2PKH addresses always start with "9" (version byte 20), so custom prefixes must too. */
+export function validVanityPrefix(prefix: string): boolean {
+  return /^9[1-9A-HJ-NP-Za-km-z]{0,3}$/.test(prefix);
+}
+
+/** Try `tries` random keys; returns a wallet whose address starts with `prefix`, else null. */
+export function findVanityWallet(prefix: string, tries: number, ignoreCase = false): WalletKey | null {
+  if (!validVanityPrefix(prefix)) throw new Error("Prefix must start with 9, use base58 characters, max 4 characters.");
+  const want = ignoreCase ? prefix.toLowerCase() : prefix;
+  for (let i = 0; i < tries; i++) {
+    const w = randomWallet();
+    const a = ignoreCase ? w.address.toLowerCase() : w.address;
+    if (a.startsWith(want)) return w;
+  }
+  return null;
+}
+
+// ---------- time-lock spend (CLTV) ----------
+
+/** Spend funds sitting in a CLTV lock back to any address. Only valid once unlockTime has passed. */
+export function buildCltvSpend(
+  utxos: Utxo[], toAddress: string, valueAtomic: number, unlockTime: number, redeemScriptHex: string
+): bitcoin.Psbt {
+  const psbt = new bitcoin.Psbt({ network: MWC_NETWORK });
+  psbt.setVersion(2);
+  psbt.setLocktime(unlockTime);
+  for (const u of utxos) {
+    if (!u.previousTransactionHex) throw new Error("Previous transaction hex is required to spend a lock");
+    psbt.addInput({
+      hash: u.txid,
+      index: u.vout,
+      sequence: 0xfffffffe, // must not be SEQUENCE_FINAL or CLTV is not enforced
+      nonWitnessUtxo: Buffer.from(u.previousTransactionHex, "hex"),
+      redeemScript: Buffer.from(redeemScriptHex, "hex")
+    });
+  }
+  psbt.addOutput({ address: toAddress, value: valueAtomic });
+  return psbt;
+}
+
+/** Sign and finalize a CLTV spend: scriptSig = <signature> <redeemScript>. */
+export function signCltvSpend(psbt: bitcoin.Psbt, wif: string): string {
+  psbt.signAllInputs(ECPair.fromWIF(wif, MWC_NETWORK));
+  psbt.data.inputs.forEach((_input, i) => {
+    psbt.finalizeInput(i, (_idx, input) => ({
+      finalScriptSig: bitcoin.script.compile([input.partialSig![0].signature, input.redeemScript!]),
+      finalScriptWitness: undefined
+    }));
+  });
+  return psbt.extractTransaction().toHex();
+}

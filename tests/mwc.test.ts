@@ -4,7 +4,11 @@ import {
   cltvRedeemScript,
   cltvP2sh,
   legacyAddressFromNode,
-  masterNodeFromMnemonic
+  masterNodeFromMnemonic,
+  randomWallet,
+  walletFromWif,
+  validVanityPrefix,
+  findVanityWallet
 } from "../src/mwc";
 
 describe("MWC network", () => {
@@ -37,5 +41,23 @@ describe("MWC network", () => {
     const result = cltvP2sh(1700000000, pubkey);
     expect(result.address).toMatch(/^[1-9A-HJ-NP-Za-km-z]+$/);
     expect(result.redeemScriptHex).toContain("b175");
+  });
+});
+
+describe("wallets", () => {
+  it("round-trips a WIF import to the same MWC address", () => {
+    const w = randomWallet();
+    expect(w.address.startsWith("9")).toBe(true);
+    const imported = walletFromWif(w.wif);
+    expect(imported.address).toBe(w.address);
+    expect(imported.publicKeyHex).toBe(w.publicKeyHex);
+  });
+
+  it("validates and finds custom address prefixes", () => {
+    expect(validVanityPrefix("9M")).toBe(true);
+    expect(validVanityPrefix("1M")).toBe(false);
+    expect(validVanityPrefix("9Mwcx")).toBe(false);
+    const w = findVanityWallet("99", 5000, true);
+    expect(w === null || w.address.toLowerCase().startsWith("99")).toBe(true);
   });
 });

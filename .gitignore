@@ -1,8 +1,5 @@
 node_modules/
-.wrangler/
-.dev.vars
 .env
-wrangler.generated.jsonc
 dist/
 coverage/
 .DS_Store

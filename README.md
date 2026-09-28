@@ -2,8 +2,7 @@
 
 This repository is the GitHub-first production foundation for the Miners World Coin (MWC) web wallet and API gateway.
 
-Everything lives in this repo and runs from GitHub: a Cloudflare Worker (deployed by GitHub
-Actions) and a static browser wallet (deployed to GitHub Pages by GitHub Actions). There is
+Everything lives in this repo and runs from GitHub: a Node API server (run it in GitHub Codespaces or anywhere Node runs) and a static browser wallet (deployed to GitHub Pages by GitHub Actions). There is
 no database and no server-side account system anywhere in this stack.
 
 ## Architecture
@@ -16,7 +15,7 @@ GitHub
   └── GitHub Actions
           │
           ▼
-   Cloudflare Workers  (stateless — no database)
+   Node server  (stateless — no database, no API keys)
           │
           ├── /info, /price, /height/... etc → original MWC API (proxied)
           ├── /broadcast → original MWC API (proxied)
@@ -85,6 +84,7 @@ New API — every one of these is stateless and public, no key required:
 - `GET /api/nodechain` — height, peers, sync state, difficulty
 - `GET /api/paramschain` — chain parameters and CLTV lock terms
 - `GET /api/minimum` — today's minimum lockup
+- `GET /api/ledgerincome` — on-chain income ledger (see below)
 - `GET /api/healthsync` — API + chain sync status
 - `GET /api/balance/:address` — confirmed balance and UTXOs
 - `GET /api/history/:address` — received transactions, with confirmations
@@ -119,70 +119,59 @@ Only the signed raw transaction is sent to the API.
 
 Enable GitHub Pages for the repository with **GitHub Actions** as the source. After that, pushes to `main` rebuild the wallet automatically.
 
-## One-time Cloudflare setup
+## Running the API server
 
-### 1. Create a Cloudflare API token
-
-Create a scoped token that can deploy this Worker.
-
-Store these GitHub Actions secrets:
-
-```text
-CLOUDFLARE_ACCOUNT_ID
-CLOUDFLARE_API_TOKEN
-```
-
-Do not commit either of these values.
-
-### 2. Cloudflare custom domain
-
-The Wrangler configuration uses:
-
-```text
-api2.minersworld.org
-```
-
-as a Cloudflare Worker Custom Domain.
-
-Your `minersworld.org` zone must be active in Cloudflare. On first deployment Cloudflare can create the DNS record and certificate for the Custom Domain.
-
-If you want a different hostname, change the `routes` entry in `wrangler.jsonc`.
-
-### 3. Push to GitHub
-
-After the secrets are configured:
-
-```bash
-git add .
-git commit -m "Add production MWC API and non-custodial wallet core"
-git push origin main
-```
-
-GitHub Actions then:
-
-1. installs dependencies
-2. typechecks
-3. runs tests
-4. deploys the Worker straight from `wrangler.jsonc`
-5. runs a smoke test
-
-## Local development
-
-Run:
+No Cloudflare, no API keys, no database. It is a plain Node (Hono) server.
 
 ```bash
 npm install
-npm run dev
+npm start          # http://localhost:8787
 ```
 
-The Worker will be available on Wrangler's local URL. There's no local database step — the
-Worker only needs the vars in `wrangler.jsonc` / `.dev.vars`.
+On GitHub: open the repo in a **Codespace** (`.devcontainer/` is included). It installs and starts the
+server automatically; in the Ports tab, set port 8787 to Public to get a shareable URL. Note that
+GitHub itself can't host an always-on server: a Codespace stops when idle. For a permanent URL, run the
+same `npm start` on any machine/VPS that runs Node.
 
-For local secrets (currently just the optional broadcast key):
+Optional environment variables: `PORT`, `ORIGINAL_API_URL` (default `https://api.minersworld.org`),
+`CORS_ORIGIN`, `MWC_MIN_LOCK_SECONDS`, `INCOME_ADDRESS`, `ALLOCATION_ADDRESSES` (see Ledger).
+
+The web wallet is still deployed to GitHub Pages by `.github/workflows/web-wallet.yml`; set its "API"
+field to wherever your server runs (it defaults to `http://localhost:8787`).
+
+## Ledger (on chain, no database)
+
+`/api/ledgerincome` reads public chain data for wallets you designate. Create a wallet (the web wallet
+can generate one, including a custom-prefix address), then start the server pointed at it:
 
 ```bash
-cp .dev.vars.example .dev.vars
+INCOME_ADDRESS=9YourIncomeWalletAddress \
+ALLOCATION_ADDRESSES=9VaultOne,9VaultTwo \   # optional
+npm start
 ```
+
+| field | meaning |
+|---|---|
+| `income_atomic` | everything ever received by `INCOME_ADDRESS` |
+| `available_atomic` | what `INCOME_ADDRESS` still holds |
+| `settled_atomic` | income minus available (what has left the income wallet) |
+| `allocated_atomic` | total currently held by `ALLOCATION_ADDRESSES` |
+| `solvent` | `available >= allocated` |
+
+These definitions are my reading of "income, allocated, settled, solvency" done purely on chain.
+If you meant something different, it's a small change in `ledgerincome()` in `src/routes/newApi.ts`.
+
+## Web wallet features
+
+- Import a private key (WIF), a mnemonic, or create a random wallet.
+- Custom address generator: pick a prefix (starts with `9`, up to 4 chars); every address is still a
+  valid MWC address (version byte 20).
+- Send, with local signing; only the signed transaction is broadcast.
+- Time lock (`<unlock-time> OP_CHECKLOCKTIMEVERIFY OP_DROP <pubkey> OP_CHECKSIG`, P2SH): the user locks
+  their own funds on chain and redeems them after the unlock time. No admin, no registration. The wallet
+  remembers locks in the browser, and a lock can be recovered from your key plus its unlock time
+  ("Track lock for this date"). Time-based locks compare against the chain's median time, which trails
+  wall-clock time by roughly an hour, so a redeem right at the unlock time may be rejected until it passes.
 
 ## Wallet core
 
@@ -278,10 +267,9 @@ For example:
 
 Recommended production controls:
 
-- keep Cloudflare API credentials only in GitHub Secrets
 - never log private keys or mnemonics
 - keep the original node RPC port private
-- put Cloudflare rate limiting/WAF in front of `/broadcast`
+- put rate limiting in front of `/broadcast` if the server is public
 - monitor `/api/healthsync`
 - review all transaction-building changes against MWC Core before release
 

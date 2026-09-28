@@ -291,3 +291,49 @@ export async function owed(c: Context<AppEnv>) {
     return fail("UPSTREAM_ERROR", String(e), id, 502);
   }
 }
+
+/**
+ * On-chain ledger. No database: the "ledger" is simply the public chain state of wallets you
+ * designate. Create a wallet (the web wallet can do it), then point the server at it:
+ *   INCOME_ADDRESS        the wallet income is paid into
+ *   ALLOCATION_ADDRESSES  optional, comma-separated wallets holding earmarked/allocated funds
+ *
+ *   income     = everything ever received by INCOME_ADDRESS
+ *   available  = what INCOME_ADDRESS still holds
+ *   settled    = income - available   (what has left the income wallet)
+ *   allocated  = total currently held by the ALLOCATION_ADDRESSES
+ *   solvent    = available >= allocated
+ */
+export async function ledgerincome(c: Context<AppEnv>) {
+  const id = c.get("requestId");
+  const income = c.env.INCOME_ADDRESS;
+  if (!income || !validBase58ish(income)) {
+    return fail("NOT_CONFIGURED", "Set INCOME_ADDRESS to the on-chain wallet that receives income.", id, 503);
+  }
+  const allocationAddresses = (c.env.ALLOCATION_ADDRESSES ?? "")
+    .split(",").map(s => s.trim()).filter(Boolean);
+  if (!allocationAddresses.every(a => validBase58ish(a))) {
+    return fail("NOT_CONFIGURED", "ALLOCATION_ADDRESSES contains an invalid address.", id, 503);
+  }
+  try {
+    const [incomeBal, ...allocBals] = await Promise.all([
+      getOriginalJson<any>(c.env, `/balance/${encodeURIComponent(income)}`),
+      ...allocationAddresses.map(a => getOriginalJson<any>(c.env, `/balance/${encodeURIComponent(a)}`))
+    ]);
+    const received = BigInt(atomicString(incomeBal?.received ?? 0));
+    const available = BigInt(atomicString(incomeBal?.balance ?? 0));
+    const settled = received - available;
+    const allocated = allocBals.reduce((s, b) => s + BigInt(atomicString(b?.balance ?? 0)), 0n);
+    return ok({
+      income_address: income,
+      allocation_addresses: allocationAddresses,
+      income_atomic: received.toString(),
+      allocated_atomic: allocated.toString(),
+      settled_atomic: settled.toString(),
+      available_atomic: available.toString(),
+      solvent: available >= allocated
+    }, id);
+  } catch (e) {
+    return fail("UPSTREAM_ERROR", String(e), id, 502);
+  }
+}
