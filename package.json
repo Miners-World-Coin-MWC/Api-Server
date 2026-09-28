@@ -1,32 +1,16 @@
 {
-  "name": "@minersworld/mwc-api-wallet",
-  "version": "0.1.0",
+  "name": "@miners-world-coin/mwc-wallet-api",
+  "version": "1.0.0",
   "private": true,
-  "description": "Production-oriented Miners World Coin API gateway and non-custodial browser wallet core.",
+  "description": "Non-custodial Miners World Coin wallet/API SDK for GitHub Pages",
   "type": "module",
-  "workspaces": ["web-wallet"],
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc --noEmit",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "start": "tsx src/server.ts"
+    "build": "node scripts/build.mjs",
+    "test": "node --test",
+    "dev": "python3 -m http.server 8080 -d dist",
+    "fetch-bitcoinjs": "node scripts/fetch-bitcoinjs.mjs"
   },
-  "dependencies": {
-    "@hono/node-server": "^1.13.0",
-    "@hono/zod-validator": "^0.4.3",
-    "bip32": "^5.0.0",
-    "bip39": "^3.1.0",
-    "bitcoinjs-lib": "^6.1.7",
-    "hono": "^4.9.7",
-    "tiny-secp256k1": "^2.2.3",
-    "ecpair": "^3.0.0",
-    "buffer": "^6.0.3"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.9.2",
-    "tsx": "^4.19.0",
-    "vitest": "^3.2.4"
+  "engines": {
+    "node": ">=20"
   }
 }

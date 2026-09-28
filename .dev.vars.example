@@ -1,4 +1,0 @@
-BROADCAST_API_KEY=""
-ORIGINAL_API_URL="https://api.minersworld.org"
-CORS_ORIGIN="*"
-MWC_MIN_LOCK_SECONDS="0"

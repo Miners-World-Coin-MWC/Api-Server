@@ -1,0 +1,18 @@
+{
+  "project": "MWC Non-Custodial Wallet API/SDK",
+  "version": "1.0.0",
+  "original_api": "https://api.minersworld.org",
+  "github_pages": true,
+  "database": false,
+  "cloudflare": false,
+  "api_keys_for_broadcast": false,
+  "network": {
+    "pubKeyHash": 20,
+    "scriptHash": 10,
+    "wif": 123,
+    "bip32Public": "0488b21e",
+    "bip32Private": "0488ade4",
+    "bech32": "mwc"
+  },
+  "cltv": "<unlock-time> OP_CHECKLOCKTIMEVERIFY OP_DROP <their pubkey> OP_CHECKSIG"
+}
