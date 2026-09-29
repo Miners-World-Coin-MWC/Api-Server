@@ -250,6 +250,17 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:40px}
       <p class="hint">Copy the raw transaction from here into the Send tab to broadcast it.</p>
     </div>
   </div>
+
+  <div class="card" style="margin-top:14px">
+    <h3>🗂 My locks</h3>
+    <p class="hint">Tracked locally in this browser for your active wallet's public key. A lock only shows as redeemable once its unlock time has passed <i>and</i> the chain confirms it still holds funds — refresh to check.</p>
+    <div class="row">
+      <button class="btn alt" id="refreshLocks">Refresh my locks</button>
+      <label style="flex:1;min-width:160px">Redeem to (blank = my address)<input id="redeemTo"></label>
+      <label style="max-width:140px">Redeem fee MWC<input id="redeemFee" type="number" step="0.00000001" value="0.01"></label>
+    </div>
+    <div class="list" id="myLocksList"><div class="item">Load a wallet, then refresh, to see its locks.</div></div>
+  </div>
 </section>
 
 <!-- BACKUP -->

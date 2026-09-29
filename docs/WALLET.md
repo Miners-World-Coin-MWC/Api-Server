@@ -24,6 +24,15 @@ The lock builder creates:
 
 and wraps it in P2SH. A lock transaction is signed locally and can be broadcast exactly like a normal transaction.
 
+The wallet UI tracks locks it creates in the browser's `localStorage`, keyed to the active
+wallet's public key (nothing is sent to the API). "My locks" re-derives each lock's status
+live from the chain on refresh - it never trusts the locally stored record for whether a lock
+is actually spendable, only for the address/script/unlock time themselves. A lock only shows a
+Redeem button once the chain confirms both that the unlock time has passed and that the address
+still holds funds. Redeeming builds a normal P2SH spend with `nLockTime` set to the lock's
+unlock time and each input's `nSequence` set to the non-final value CLTV requires, signs it
+locally, and hands the raw transaction to the Send tab for the user to broadcast.
+
 ## Stateless endpoints
 
 `locks` and `owed` cannot truthfully be numeric database-like ledgers without a chain index or deterministic upstream endpoint. The implementation returns explicit unavailable status instead of fabricating state.

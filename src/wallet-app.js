@@ -7,6 +7,7 @@ import { BIP32Factory } from 'bip32';
 import { MWC_NETWORK, MWC_CHAIN, CLTV } from './config/network.js';
 import { MWCWalletAPI } from './api/index.js';
 import { createCltvRedeemScript } from './transaction/cltv.js';
+import { buildCltvScriptSig } from './transaction/cltvSpend.js';
 
 const bip32 = BIP32Factory(ecc);
 const api = new MWCWalletAPI();
@@ -111,6 +112,7 @@ function refreshWallet() {
   $('walletChip').classList.add('active');
   $('chipAddress').textContent = active.address.slice(0, 10) + '…' + active.address.slice(-6);
   $('chipBalance').textContent = '';
+  renderLocks().catch(() => {});
 }
 $('toggleWif').onclick = () => {
   const el = $('walletWif');
@@ -407,6 +409,7 @@ $('makeCltv').onclick = guard(() => {
   $('cltvDetails').style.display = '';
   $('cltvScriptOut').textContent = script;
   $('cltvAddressOut').textContent = p2sh.address;
+  trackLock({ pubkey: pub.toLowerCase(), unlockTime: t, script, address: p2sh.address, createdAt: Math.floor(Date.now() / 1000) });
   log({ unlockTime: t, pubkey: pub, redeemScript: script, p2shAddress: p2sh.address, template: '<unlock-time> OP_CHECKLOCKTIMEVERIFY OP_DROP <their pubkey> OP_CHECKSIG' });
 }, 'Lock address created');
 
@@ -428,8 +431,123 @@ $('lockFunds').onclick = guard(() => {
   if (change > 0) txb.addOutput(active.address, change);
   selected.forEach((u, i) => txb.sign(i, active.key));
   $('rawTx').value = txb.build().toHex();
+  trackLock({ pubkey: hex(active.key.publicKey), unlockTime: unlock, script: lastCltv.script, address: lastCltv.address, createdAt: Math.floor(Date.now() / 1000) });
   log({ lockTransaction: true, unlockTime: unlock, p2shAddress: lastCltv.address, amountMwc: formatMwc(amount), feeMwc: formatMwc(fee), raw: $('rawTx').value });
-  toast('Lock transaction signed — broadcast it from the Send tab');
+  toast('Lock transaction signed — broadcast it from the Send tab, then Refresh my locks once confirmed');
+  document.querySelector('nav.tabs button[data-tab="send"]').click();
+});
+
+// ---------- my locks: local tracking, live status, and redeeming a matured lock ----------
+const LOCKS_KEY = 'mwc_locks_v1';
+function loadLocks() { try { return JSON.parse(localStorage.getItem(LOCKS_KEY) || '[]'); } catch { return []; } }
+function saveLocks(list) { localStorage.setItem(LOCKS_KEY, JSON.stringify(list)); }
+function trackLock(lock) {
+  const list = loadLocks();
+  if (!list.some((l) => l.address === lock.address)) { list.push(lock); saveLocks(list); }
+  if (active && lock.pubkey === hex(active.key.publicKey)) renderLocks().catch(() => {});
+}
+
+let lastLockRows = [];
+async function renderLocks() {
+  const container = $('myLocksList');
+  if (!active) { container.innerHTML = '<div class="item">Load a wallet, then refresh, to see its locks.</div>'; return; }
+  const myPub = hex(active.key.publicKey);
+  const list = loadLocks().filter((l) => l.pubkey === myPub);
+  if (!list.length) { container.innerHTML = '<div class="item">No tracked locks yet for this wallet — create one above.</div>'; lastLockRows = []; return; }
+  container.innerHTML = '<div class="item">Checking lock status on chain…</div>';
+  let height = null;
+  try { height = (await api.nodechain()).height; } catch { /* height stays null; height-based locks just show as unknown */ }
+  const nowSec = Math.floor(Date.now() / 1000);
+  lastLockRows = await Promise.all(list.map(async (lock) => {
+    let balanceAtomic = 0, utxos = [], checkFailed = false;
+    try {
+      const b = await api.balance(lock.address);
+      balanceAtomic = Number(b.confirmed.balance);
+      utxos = b.confirmed.utxos || [];
+    } catch { checkFailed = true; }
+    const isTimeLock = lock.unlockTime >= CLTV.timeThreshold;
+    const reached = isTimeLock ? nowSec >= lock.unlockTime : (height !== null && height >= lock.unlockTime);
+    return { lock, balanceAtomic, utxos, isTimeLock, reached, checkFailed };
+  }));
+  renderLockRows();
+}
+function renderLockRows() {
+  const container = $('myLocksList');
+  const nowSec = Math.floor(Date.now() / 1000);
+  container.innerHTML = '';
+  for (const row of lastLockRows) {
+    const canRedeem = row.reached && row.balanceAtomic > 0 && row.utxos.length > 0;
+    let statusHtml, whenHtml;
+    if (row.checkFailed) {
+      statusHtml = '<span class="badge">Could not check</span>';
+    } else if (row.balanceAtomic <= 0) {
+      statusHtml = '<span class="badge">Not funded yet</span>';
+    } else if (canRedeem) {
+      statusHtml = `<span class="badge good">Unlocked — ${formatMwc(row.balanceAtomic)} MWC</span>`;
+    } else if (row.isTimeLock) {
+      statusHtml = `<span class="badge wait" data-countdown="${row.lock.address}">Locked — ${formatDuration(Math.max(0, row.lock.unlockTime - nowSec))} left</span>`;
+    } else {
+      const blocksLeft = height === null ? '?' : Math.max(0, row.lock.unlockTime - height);
+      statusHtml = `<span class="badge wait">Locked — ${blocksLeft} blocks left</span>`;
+    }
+    whenHtml = row.isTimeLock ? `Unlocks ${new Date(row.lock.unlockTime * 1000).toLocaleString()}` : `Unlocks at block height ${row.lock.unlockTime}`;
+    const div = document.createElement('div');
+    div.className = 'item';
+    div.innerHTML = `<div class="top"><span class="mono">${row.lock.address.slice(0, 10)}…${row.lock.address.slice(-6)}</span>${statusHtml}</div>
+      <div class="hint" style="margin:4px 0">${whenHtml}</div>
+      <div class="row">
+        <button class="icon" data-copy-text="${row.lock.address}">⧉ copy address</button>
+        ${canRedeem ? `<button class="btn" data-redeem="${row.lock.address}">Redeem</button>` : ''}
+      </div>`;
+    container.appendChild(div);
+  }
+}
+// Ticks the visible countdowns between refreshes without hitting the API - it only updates
+// the text, it never re-enables Redeem (that only happens after an explicit chain refresh).
+setInterval(() => {
+  if (!lastLockRows.length) return;
+  const nowSec = Math.floor(Date.now() / 1000);
+  document.querySelectorAll('[data-countdown]').forEach((el) => {
+    const row = lastLockRows.find((r) => r.lock.address === el.dataset.countdown);
+    if (row) el.textContent = `Locked — ${formatDuration(Math.max(0, row.lock.unlockTime - nowSec))} left`;
+  });
+}, 30000);
+
+$('refreshLocks').onclick = guard(renderLocks);
+$('myLocksList').addEventListener('click', (e) => {
+  const copyBtn = e.target.closest('button[data-copy-text]');
+  if (copyBtn) { navigator.clipboard?.writeText(copyBtn.dataset.copyText).then(() => toast('Copied', 'good')).catch(() => {}); return; }
+  const redeemBtn = e.target.closest('button[data-redeem]');
+  if (redeemBtn) redeemLock(redeemBtn.dataset.redeem);
+});
+
+const redeemLock = guard((address) => {
+  if (!active) throw Error('Load the wallet this lock belongs to first.');
+  const row = lastLockRows.find((r) => r.lock.address === address);
+  if (!row) throw Error('Refresh my locks first.');
+  if (!row.reached) throw Error('This lock has not reached its unlock time yet.');
+  if (!row.utxos.length) throw Error('Nothing spendable there right now — refresh my locks.');
+  const fee = Math.round(Number($('redeemFee').value || 0.01) * 1e8);
+  const total = row.utxos.reduce((s, u) => s + u.value, 0);
+  if (total <= fee) throw Error('The locked amount does not cover the redeem fee.');
+  const toAddress = $('redeemTo').value.trim() || active.address;
+  const value = total - fee;
+
+  const txb = new bitcoin.TransactionBuilder(net());
+  for (const u of row.utxos) txb.addInput(u.txid, u.index, CLTV.nonFinalSequence);
+  txb.addOutput(toAddress, value);
+  const tx = txb.buildIncomplete();
+  tx.locktime = row.lock.unlockTime; // required for OP_CHECKLOCKTIMEVERIFY to pass
+  const redeemScript = Buffer.from(row.lock.script, 'hex');
+  row.utxos.forEach((u, i) => {
+    const sigHash = tx.hashForSignature(i, redeemScript, bitcoin.Transaction.SIGHASH_ALL);
+    const derSig = bitcoin.script.signature.encode(active.key.sign(sigHash), bitcoin.Transaction.SIGHASH_ALL);
+    tx.setInputScript(i, Buffer.from(buildCltvScriptSig(hex(derSig), row.lock.script), 'hex'));
+  });
+
+  $('rawTx').value = tx.toHex();
+  log({ redeemTransaction: true, from: address, to: toAddress, amountMwc: formatMwc(value), feeMwc: formatMwc(fee), unlockTime: row.lock.unlockTime, raw: $('rawTx').value });
+  toast('Redeem transaction signed — review and broadcast it from the Send tab');
   document.querySelector('nav.tabs button[data-tab="send"]').click();
 });
 
