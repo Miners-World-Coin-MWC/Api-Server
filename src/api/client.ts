@@ -148,38 +148,34 @@ export class MWCAPIClient {
   }
 
   async broadcast(raw: string) {
-    // The exact field name this API expects for /broadcast isn't documented anywhere I can
-    // verify, and guessing wrong twice already produced this exact failure mode: the server
-    // reads a different key than the one we send, gets `null`, and forwards that straight to
-    // a Bitcoin-Core-style RPC call ("Expected type string, got null"). Rather than guess a
-    // third time, try the plausible field names in order and use whichever one the API
-    // actually accepts. A real rejection (double-spend, bad fee, etc.) looks different from
-    // this specific "wrong key" signature, so we only move to the next candidate when the
-    // error matches that signature - any other error is a genuine rejection and is thrown
-    // immediately rather than retried.
-    const candidates = ["raw", "rawtx", "hex", "tx"];
-    const attempts: string[] = [];
-    let lastError: unknown;
-    for (const field of candidates) {
-      try {
-        return await this.request<string>("/broadcast", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ [field]: raw })
-        });
-      } catch (e) {
-        lastError = e;
-        attempts.push(field);
-        const detail = e instanceof MwcApiError ? JSON.stringify(e.details) : String(e);
-        const looksLikeWrongFieldName = /got null|missing|required|undefined/i.test(detail);
-        if (!looksLikeWrongFieldName) throw e;
+    // Confirmed directly against the real API: the body is the raw transaction hex itself,
+    // sent as plain text - not JSON, and not wrapped in any {"field": ...} object. The
+    // response is still the normal JSON envelope, so response parsing is unchanged.
+    try {
+      return await this.request<string>("/broadcast", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: raw
+      });
+    } catch (e) {
+      // Kept only as a defensive fallback in case behavior ever differs by client; the plain
+      // text body above is the confirmed, correct shape and should always succeed first.
+      const detail = e instanceof MwcApiError ? JSON.stringify(e.details) : String(e);
+      if (!/got null|missing|required|undefined/i.test(detail)) throw e;
+      const candidates = ["raw", "rawtx", "hex", "tx"];
+      let lastError: unknown = e;
+      for (const field of candidates) {
+        try {
+          return await this.request<string>("/broadcast", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [field]: raw })
+          });
+        } catch (e2) {
+          lastError = e2;
+        }
       }
+      throw lastError;
     }
-    throw new MwcApiError(
-      `MWC API rejected /broadcast under every field name tried (${attempts.join(", ")}). ` +
-        `The real error from the last attempt is attached below - please check it and tell me the correct field name if you can find it.`,
-      undefined,
-      lastError
-    );
   }
 }
