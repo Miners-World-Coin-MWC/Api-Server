@@ -55,7 +55,9 @@ export class MWCAPIClient {
       "error" in body &&
       (body as ApiEnvelope<T>).error
     ) {
-      throw new MwcApiError("MWC API returned an error", response.status, body);
+      const detail = (body as ApiEnvelope<T>).error;
+      const detailText = typeof detail === "string" ? detail : JSON.stringify(detail);
+      throw new MwcApiError(`MWC API returned an error: ${detailText}`, response.status, body);
     }
 
     if (
