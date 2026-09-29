@@ -32,8 +32,27 @@ function toast(message, kind = 'info') {
   const el = document.createElement('div');
   el.className = 'toast' + (kind === 'bad' ? ' bad' : kind === 'good' ? ' good' : '');
   el.textContent = message;
+  el.style.cursor = 'pointer';
+  el.title = 'Click to dismiss';
+  el.onclick = () => el.remove();
   $('toasts').appendChild(el);
-  setTimeout(() => el.remove(), 4200);
+  setTimeout(() => el.remove(), kind === 'bad' ? 9000 : 4200);
+}
+// MwcApiError (thrown by MWCAPIClient) carries the real upstream body in `.details`, but
+// the message alone is a generic "MWC API returned an error" — surface the actual reason.
+function describeError(e) {
+  if (!e) return 'Unknown error';
+  let msg = e.message || String(e);
+  const d = e.details;
+  if (d && typeof d === 'object') {
+    const reason = 'error' in d ? d.error : d;
+    if (reason !== undefined && reason !== null) {
+      msg += ': ' + (typeof reason === 'string' ? reason : JSON.stringify(reason));
+    }
+  } else if (typeof d === 'string' && d) {
+    msg += ': ' + d;
+  }
+  return msg;
 }
 function guard(fn, okMsg) {
   return async (...args) => {
@@ -42,8 +61,9 @@ function guard(fn, okMsg) {
       if (okMsg) toast(okMsg, 'good');
       return r;
     } catch (e) {
-      toast(e.message || String(e), 'bad');
-      log(e.message || String(e));
+      const msg = describeError(e);
+      toast(msg, 'bad');
+      log(msg);
     }
   };
 }
@@ -224,8 +244,7 @@ $('broadcast').onclick = guard(async () => {
   return r;
 }, 'Broadcast');
 
-// ---------- vanity ----------
-// ---------- vanity ----------
+// ---------- vanity (parallel across CPU cores via Web Workers, with a safe fallback) ----------
 const BASE58_RE = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]*$/;
 function normalizedVanityInput() {
   let typed = $('vanityPrefix').value.trim();
@@ -238,18 +257,30 @@ function formatDuration(seconds) {
   if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} hours`;
   return `${(seconds / 86400).toFixed(1)} days`;
 }
-const ASSUMED_ATTEMPTS_PER_SECOND = 60000; // rough single-threaded baseline until we measure the real rate
+const ASSUMED_ATTEMPTS_PER_SECOND = 60000; // rough single-core baseline until we measure the real rate
 function updateVanityDifficulty() {
   const typed = normalizedVanityInput();
   const el = $('vanityDifficulty');
   if (!typed) { el.textContent = 'Target: 9 — type a prefix to see the expected number of attempts.'; return; }
   if (!BASE58_RE.test(typed)) { el.textContent = 'Contains characters that are not valid Base58.'; return; }
   const expected = Math.pow(58, typed.length);
-  const eta = formatDuration(expected / ASSUMED_ATTEMPTS_PER_SECOND);
-  el.textContent = `Target: 9${typed} — average of ~${expected.toLocaleString(undefined, { maximumFractionDigits: 0 })} attempts, roughly ${eta} on this device (varies with luck and CPU speed).`;
+  const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
+  const eta = formatDuration(expected / (ASSUMED_ATTEMPTS_PER_SECOND * threads));
+  el.textContent = `Target: 9${typed} — average of ~${expected.toLocaleString(undefined, { maximumFractionDigits: 0 })} attempts, roughly ${eta} on this device across ${threads} threads (varies with luck and CPU speed).`;
 }
 $('vanityPrefix').addEventListener('input', updateVanityDifficulty);
 updateVanityDifficulty();
+
+let vanityWorkers = [];
+function stopVanityWorkers() { vanityWorkers.forEach((w) => w.terminate()); vanityWorkers = []; }
+function finishVanity() {
+  vanityRunning = false;
+  stopVanityWorkers();
+  $('vanity').disabled = false;
+  $('vanityStop').style.display = 'none';
+  $('vanityBar').style.display = 'none';
+}
+$('vanityStop').onclick = () => { finishVanity(); toast('Stopped'); };
 
 $('vanity').onclick = () => {
   const typed = normalizedVanityInput();
@@ -260,45 +291,111 @@ $('vanity').onclick = () => {
   const wanted = '9' + typed;
   $('vanityPrefix').value = typed;
   const expected = Math.pow(58, typed.length);
+
   vanityRunning = true;
   $('vanity').disabled = true;
   $('vanityStop').style.display = '';
   $('vanityBar').style.display = '';
   $('vanityResult').style.display = 'none';
-  let attempts = 0;
+
   const start = performance.now();
-  (function step() {
-    if (!vanityRunning) { finishVanity(); return; }
-    for (let i = 0; i < 400; i++) {
-      const key = bitcoin.ECPair.makeRandom({ network: net() });
-      attempts++;
-      const a = addressFromKey(key);
-      if (a.startsWith(wanted)) {
-        walletFromKey(key);
-        const seconds = ((performance.now() - start) / 1000).toFixed(2);
-        $('vanityResult').style.display = '';
-        $('vanityResult').innerHTML = `<div><span class="k">Address</span><span class="v mono">${a}</span></div><div><span class="k">Attempts</span><span class="v">${attempts.toLocaleString()}</span></div><div><span class="k">Time</span><span class="v">${seconds}s</span></div>`;
-        log({ vanity: true, prefix: wanted, address: a, wif: key.toWIF(), attempts, seconds: Number(seconds) });
-        toast('Custom address found: ' + a, 'good');
-        finishVanity();
-        return;
-      }
-    }
+  let attempts = 0;
+  let sawAnyResponse = false;
+
+  function showFound(address, wif) {
+    if (!vanityRunning) return;
+    const key = keyFromWif(wif);
+    walletFromKey(key);
+    const seconds = ((performance.now() - start) / 1000).toFixed(2);
+    $('vanityResult').style.display = '';
+    $('vanityResult').innerHTML = `<div><span class="k">Address</span><span class="v mono">${address}</span></div><div><span class="k">Attempts</span><span class="v">${attempts.toLocaleString()}</span></div><div><span class="k">Time</span><span class="v">${seconds}s</span></div>`;
+    log({ vanity: true, prefix: wanted, address, wif, attempts, seconds: Number(seconds) });
+    toast('Custom address found: ' + address, 'good');
+    finishVanity();
+  }
+  function updateStatus(threadCount) {
     const elapsed = (performance.now() - start) / 1000;
     const rate = attempts / elapsed;
-    $('vanityStatus').textContent = `${attempts.toLocaleString()} attempts (~${(attempts / expected * 100).toFixed(1)}% of the average) · ${elapsed.toFixed(1)}s elapsed · ${Math.round(rate).toLocaleString()} attempts/sec · est. ${formatDuration(expected / rate)} on average at this rate`;
-    setTimeout(step, 0);
-  })();
+    $('vanityStatus').textContent = `${attempts.toLocaleString()} attempts (~${(attempts / expected * 100).toFixed(1)}% of the average) · ${elapsed.toFixed(1)}s elapsed · ${Math.round(rate).toLocaleString()} attempts/sec across ${threadCount} thread${threadCount === 1 ? '' : 's'} · est. ${formatDuration(expected / rate)} on average at this rate`;
+  }
+
+  // --- single-threaded fallback (identical to the original implementation) ---
+  function runFallback() {
+    (function step() {
+      if (!vanityRunning) return;
+      for (let i = 0; i < 400; i++) {
+        const key = bitcoin.ECPair.makeRandom({ network: net() });
+        attempts++;
+        const a = addressFromKey(key);
+        if (a.startsWith(wanted)) { showFound(a, key.toWIF()); return; }
+      }
+      updateStatus(1);
+      setTimeout(step, 0);
+    })();
+  }
+
+  // --- parallel Web Worker search ---
+  let usedFallback = false;
+  function fallbackIfWorkersNeverRespond() {
+    setTimeout(() => {
+      if (!vanityRunning || sawAnyResponse) return;
+      stopVanityWorkers();
+      usedFallback = true;
+      toast('Workers unavailable in this environment - falling back to a single-threaded search.', 'info');
+      runFallback();
+    }, 2500);
+  }
+
+  try {
+    const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
+    for (let i = 0; i < threads; i++) {
+      const worker = new Worker(new URL('./wallet/vanity-worker.js', import.meta.url), { type: 'module' });
+      worker.onmessage = (e) => {
+        if (usedFallback) return; // a stray message from a worker we already gave up on
+        sawAnyResponse = true;
+        const msg = e.data;
+        attempts += msg.attempts;
+        if (msg.type === 'found') {
+          const priv = Buffer.from(msg.privateKeyHex, 'hex');
+          const key = bitcoin.ECPair.fromPrivateKey(priv, { network: net() });
+          vanityRunning = false; // stop other workers from also reporting "found"
+          showFound(msg.address, key.toWIF());
+        } else {
+          updateStatus(vanityWorkers.length);
+        }
+      };
+      worker.onerror = () => { /* handled by fallbackIfWorkersNeverRespond below */ };
+      worker.postMessage({ type: 'start', prefix: wanted, pubKeyHashVersion: net().pubKeyHash, batchSize: 3000 });
+      vanityWorkers.push(worker);
+    }
+    fallbackIfWorkersNeverRespond();
+  } catch (err) {
+    stopVanityWorkers();
+    runFallback();
+  }
 };
-function finishVanity() {
-  vanityRunning = false;
-  $('vanity').disabled = false;
-  $('vanityStop').style.display = 'none';
-  $('vanityBar').style.display = 'none';
-}
-$('vanityStop').onclick = () => { vanityRunning = false; toast('Stopped'); };
 
 // ---------- CLTV lock ----------
+function updateUnlockPreview() {
+  const t = Number($('unlockTime').value);
+  const el = $('unlockPreview');
+  if (!t) { el.textContent = ''; return; }
+  if (t >= CLTV.timeThreshold) {
+    el.textContent = `Unlocks: ${new Date(t * 1000).toLocaleString()} (${Math.max(0, Math.round((t - Date.now() / 1000) / 86400))} days from now)`;
+  } else {
+    el.textContent = `Interpreted as a block height (below ${CLTV.timeThreshold.toLocaleString()}), not a date.`;
+  }
+}
+$('unlockTime').addEventListener('input', updateUnlockPreview);
+$('durationPresets').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-days]');
+  if (!btn) return;
+  document.querySelectorAll('#durationPresets button').forEach((b) => b.classList.toggle('alt', b !== btn));
+  const days = Number(btn.dataset.days);
+  $('unlockTime').value = Math.floor(Date.now() / 1000) + days * 86400;
+  updateUnlockPreview();
+});
+
 $('makeCltv').onclick = guard(() => {
   const t = Number($('unlockTime').value);
   const pub = $('lockPub').value.trim() || hex(active?.key?.publicKey || []);

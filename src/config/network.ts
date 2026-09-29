@@ -27,5 +27,7 @@ export const MWC_CHAIN = Object.freeze({
 export const CLTV = Object.freeze({
   opcodeName: "OP_CHECKLOCKTIMEVERIFY",
   maxVanityPrefixLength: 10,
-  nonFinalSequence: 0xfffffffe
+  nonFinalSequence: 0xfffffffe,
+  // BIP65: values below this are interpreted as a block height, at/above it as a unix time.
+  timeThreshold: 500_000_000
 } as const);
