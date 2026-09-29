@@ -38,7 +38,11 @@ export class MWCAPIClient {
     try {
       body = JSON.parse(text);
     } catch {
-      throw new MwcApiError("MWC API returned invalid JSON", response.status, text);
+      throw new MwcApiError(
+        "MWC API returned invalid JSON",
+        response.status,
+        text
+      );
     }
 
     if (!response.ok) {
@@ -56,8 +60,16 @@ export class MWCAPIClient {
       (body as ApiEnvelope<T>).error
     ) {
       const detail = (body as ApiEnvelope<T>).error;
-      const detailText = typeof detail === "string" ? detail : JSON.stringify(detail);
-      throw new MwcApiError(`MWC API returned an error: ${detailText}`, response.status, body);
+      const detailText =
+        typeof detail === "string"
+          ? detail
+          : JSON.stringify(detail);
+
+      throw new MwcApiError(
+        `MWC API returned an error: ${detailText}`,
+        response.status,
+        body
+      );
     }
 
     if (
@@ -80,15 +92,21 @@ export class MWCAPIClient {
   }
 
   height(height: number) {
-    return this.request<unknown>(`/height/${encodeURIComponent(height)}`);
+    return this.request<unknown>(
+      `/height/${encodeURIComponent(height)}`
+    );
   }
 
   block(hash: string) {
-    return this.request<unknown>(`/block/${encodeURIComponent(hash)}`);
+    return this.request<unknown>(
+      `/block/${encodeURIComponent(hash)}`
+    );
   }
 
   header(hash: string) {
-    return this.request<unknown>(`/header/${encodeURIComponent(hash)}`);
+    return this.request<unknown>(
+      `/header/${encodeURIComponent(hash)}`
+    );
   }
 
   range(height: number, offset = 3) {
@@ -110,21 +128,31 @@ export class MWCAPIClient {
   }
 
   unspent(address: string, amount?: number) {
-    const suffix = amount === undefined ? "" : `?amount=${encodeURIComponent(amount)}`;
+    const suffix =
+      amount === undefined
+        ? ""
+        : `?amount=${encodeURIComponent(amount)}`;
+
     return this.request<import("../types.js").MwcUtxo[]>(
       `/unspent/${encodeURIComponent(address)}${suffix}`
     );
   }
 
   history(address: string, offset?: number) {
-    const suffix = offset === undefined ? "" : `?offset=${encodeURIComponent(offset)}`;
+    const suffix =
+      offset === undefined
+        ? ""
+        : `?offset=${encodeURIComponent(offset)}`;
+
     return this.request<{ tx: string[]; txcount: number }>(
       `/history/${encodeURIComponent(address)}${suffix}`
     );
   }
 
   transaction(hash: string) {
-    return this.request<unknown>(`/transaction/${encodeURIComponent(hash)}`);
+    return this.request<unknown>(
+      `/transaction/${encodeURIComponent(hash)}`
+    );
   }
 
   mempool() {
@@ -144,38 +172,41 @@ export class MWCAPIClient {
   }
 
   decode(raw: string) {
-    return this.request<unknown>(`/decode/${encodeURIComponent(raw)}`);
+    return this.request<unknown>(
+      `/decode/${encodeURIComponent(raw)}`
+    );
   }
 
   async broadcast(raw: string) {
-    // Confirmed directly against the real API: the body is the raw transaction hex itself,
-    // sent as plain text - not JSON, and not wrapped in any {"field": ...} object. The
-    // response is still the normal JSON envelope, so response parsing is unchanged.
-    try {
-      return await this.request<string>("/broadcast", {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: raw
-      });
-    } catch (e) {
-      // Kept only as a defensive fallback in case behavior ever differs by client; the plain
-      // text body above is the confirmed, correct shape and should always succeed first.
-      const detail = e instanceof MwcApiError ? JSON.stringify(e.details) : String(e);
-      if (!/got null|missing|required|undefined/i.test(detail)) throw e;
-      const candidates = ["raw", "rawtx", "hex", "tx"];
-      let lastError: unknown = e;
-      for (const field of candidates) {
-        try {
-          return await this.request<string>("/broadcast", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ [field]: raw })
-          });
-        } catch (e2) {
-          lastError = e2;
-        }
-      }
-      throw lastError;
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      throw new MwcApiError(
+        "Cannot broadcast an empty raw transaction"
+      );
     }
+
+    /*
+     * The official MWC API /broadcast endpoint expects the raw
+     * transaction as a form parameter named "raw":
+     *
+     *     raw = <signed transaction hex>
+     *
+     * The Python API implementation is:
+     *
+     *     raw = request.values.get("raw")
+     *     return Transaction().broadcast(raw)
+     *
+     * Therefore this must NOT be sent as plain text and must NOT
+     * be wrapped in JSON.
+     */
+    const body = new URLSearchParams();
+    body.set("raw", raw.trim());
+
+    return this.request<string>("/broadcast", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: body.toString()
+    });
   }
 }
