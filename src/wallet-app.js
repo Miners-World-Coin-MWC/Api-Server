@@ -246,14 +246,17 @@ $('broadcast').onclick = guard(async () => {
   return r;
 }, 'Broadcast');
 
-// ---------- vanity (parallel across CPU cores via Web Workers, with a safe fallback) ----------
+
+ // ---------- vanity (parallel across CPU cores via Web Workers, with a safe fallback) ----------
+
 const BASE58_RE = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]*$/;
 function normalizedVanityInput() {
   let typed = $('vanityPrefix').value.trim();
-  if (typed.startsWith('9')) typed = typed.slice(1); // the mandatory leading 9 doesn't count against the limit
+  if (typed.startsWith('9')) typed = typed.slice(1);
   return typed;
 }
 function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return 'calculating…';
   if (seconds < 60) return `${seconds.toFixed(0)}s`;
   if (seconds < 3600) return `${(seconds / 60).toFixed(1)} min`;
   if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} hours`;
@@ -263,35 +266,82 @@ const ASSUMED_ATTEMPTS_PER_SECOND = 60000; // rough single-core baseline until w
 function updateVanityDifficulty() {
   const typed = normalizedVanityInput();
   const el = $('vanityDifficulty');
-  if (!typed) { el.textContent = 'Target: 9 — type a prefix to see the expected number of attempts.'; return; }
-  if (!BASE58_RE.test(typed)) { el.textContent = 'Contains characters that are not valid Base58.'; return; }
+
+  if (!typed) {
+    el.textContent = 'Target: 9 — type a prefix to see the expected number of attempts.';
+    return;
+  }
+
+  if (!BASE58_RE.test(typed)) {
+    el.textContent = 'Contains characters that are not valid Base58.';
+    return;
+  }
+
   const expected = Math.pow(58, typed.length);
   const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
   const eta = formatDuration(expected / (ASSUMED_ATTEMPTS_PER_SECOND * threads));
-  el.textContent = `Target: 9${typed} — average of ~${expected.toLocaleString(undefined, { maximumFractionDigits: 0 })} attempts, roughly ${eta} on this device across ${threads} threads (varies with luck and CPU speed).`;
+
+  el.textContent =
+    `Target: 9${typed} — average of ~${expected.toLocaleString(undefined, {
+      maximumFractionDigits: 0
+    })} attempts, roughly ${eta} on this device across ${threads} threads (varies with luck and CPU speed).`;
 }
+
 $('vanityPrefix').addEventListener('input', updateVanityDifficulty);
 updateVanityDifficulty();
 
 let vanityWorkers = [];
-function stopVanityWorkers() { vanityWorkers.forEach((w) => w.terminate()); vanityWorkers = []; }
+
+function stopVanityWorkers() {
+  vanityWorkers.forEach((worker) => {
+    try {
+      worker.terminate();
+    } catch {
+      // Ignore workers that have already terminated.
+    }
+  });
+
+  vanityWorkers = [];
+}
+
 function finishVanity() {
   vanityRunning = false;
   stopVanityWorkers();
+
   $('vanity').disabled = false;
   $('vanityStop').style.display = 'none';
   $('vanityBar').style.display = 'none';
 }
-$('vanityStop').onclick = () => { finishVanity(); toast('Stopped'); };
+
+$('vanityStop').onclick = () => {
+  finishVanity();
+  toast('Stopped');
+};
 
 $('vanity').onclick = () => {
+  if (vanityRunning) return;
+
   const typed = normalizedVanityInput();
   const maxLen = CLTV.maxVanityPrefixLength;
-  if (!typed) { toast('Type at least one character after the 9.', 'bad'); return; }
-  if (typed.length > maxLen) { toast(`At most ${maxLen} characters after the 9.`, 'bad'); return; }
-  if (!BASE58_RE.test(typed)) { toast('Prefix contains characters that are not valid Base58.', 'bad'); return; }
+
+  if (!typed) {
+    toast('Type at least one character after the 9.', 'bad');
+    return;
+  }
+
+  if (typed.length > maxLen) {
+    toast(`At most ${maxLen} characters after the 9.`, 'bad');
+    return;
+  }
+
+  if (!BASE58_RE.test(typed)) {
+    toast('Prefix contains characters that are not valid Base58.', 'bad');
+    return;
+  }
+
   const wanted = '9' + typed;
   $('vanityPrefix').value = typed;
+
   const expected = Math.pow(58, typed.length);
 
   vanityRunning = true;
@@ -299,80 +349,239 @@ $('vanity').onclick = () => {
   $('vanityStop').style.display = '';
   $('vanityBar').style.display = '';
   $('vanityResult').style.display = 'none';
+  $('vanityStatus').textContent = 'Starting vanity search…';
 
   const start = performance.now();
   let attempts = 0;
   let sawAnyResponse = false;
+  let usedFallback = false;
+  let resultAccepted = false;
+
+  function updateStatus(threadCount) {
+    const elapsed = Math.max(0.001, (performance.now() - start) / 1000);
+    const rate = attempts / elapsed;
+    const eta = rate > 0 ? formatDuration(expected / rate) : 'calculating…';
+
+    $('vanityStatus').textContent =
+      `${attempts.toLocaleString()} attempts ` +
+      `(~${(attempts / expected * 100).toFixed(1)}% of the average) · ` +
+      `${elapsed.toFixed(1)}s elapsed · ` +
+      `${Math.round(rate).toLocaleString()} attempts/sec across ` +
+      `${threadCount} thread${threadCount === 1 ? '' : 's'} · ` +
+      `est. ${eta} on average at this rate`;
+  }
 
   function showFound(address, wif) {
-    if (!vanityRunning) return;
-    const key = keyFromWif(wif);
-    walletFromKey(key);
-    const seconds = ((performance.now() - start) / 1000).toFixed(2);
-    $('vanityResult').style.display = '';
-    $('vanityResult').innerHTML = `<div><span class="k">Address</span><span class="v mono">${address}</span></div><div><span class="k">Attempts</span><span class="v">${attempts.toLocaleString()}</span></div><div><span class="k">Time</span><span class="v">${seconds}s</span></div>`;
-    log({ vanity: true, prefix: wanted, address, wif, attempts, seconds: Number(seconds) });
-    toast('Custom address found: ' + address, 'good');
-    finishVanity();
-  }
-  function updateStatus(threadCount) {
-    const elapsed = (performance.now() - start) / 1000;
-    const rate = attempts / elapsed;
-    $('vanityStatus').textContent = `${attempts.toLocaleString()} attempts (~${(attempts / expected * 100).toFixed(1)}% of the average) · ${elapsed.toFixed(1)}s elapsed · ${Math.round(rate).toLocaleString()} attempts/sec across ${threadCount} thread${threadCount === 1 ? '' : 's'} · est. ${formatDuration(expected / rate)} on average at this rate`;
-  }
+    if (!vanityRunning || resultAccepted) return;
 
-  // --- single-threaded fallback (identical to the original implementation) ---
-  function runFallback() {
-    (function step() {
-      if (!vanityRunning) return;
-      for (let i = 0; i < 400; i++) {
-        const key = bitcoin.ECPair.makeRandom({ network: net() });
-        attempts++;
-        const a = addressFromKey(key);
-        if (a.startsWith(wanted)) { showFound(a, key.toWIF()); return; }
+    // Claim the result before updating the UI to prevent another worker
+    // from displaying a second result.
+    resultAccepted = true;
+
+    try {
+      const key = keyFromWif(wif);
+      const derivedAddress = addressFromKey(key);
+
+      if (derivedAddress !== address || !derivedAddress.startsWith(wanted)) {
+        throw new Error('Vanity result verification failed.');
       }
-      updateStatus(1);
-      setTimeout(step, 0);
-    })();
+
+      walletFromKey(key);
+
+      const seconds = ((performance.now() - start) / 1000).toFixed(2);
+
+      $('vanityResult').style.display = '';
+      $('vanityResult').innerHTML =
+        `<div><span class="k">Address</span>` +
+        `<span class="v mono"></span></div>` +
+        `<div><span class="k">Attempts</span>` +
+        `<span class="v">${attempts.toLocaleString()}</span></div>` +
+        `<div><span class="k">Time</span>` +
+        `<span class="v">${seconds}s</span></div>`;
+
+      // Use textContent for the address rather than inserting it as HTML.
+      $('vanityResult').querySelector('.mono').textContent = address;
+
+      log({
+        vanity: true,
+        prefix: wanted,
+        address,
+        wif,
+        attempts,
+        seconds: Number(seconds)
+      });
+
+      toast('Custom address found: ' + address, 'good');
+    } catch (err) {
+      resultAccepted = false;
+      const reason = err?.message || String(err);
+      log({ vanityError: reason });
+      toast(reason, 'bad');
+    } finally {
+      finishVanity();
+    }
   }
 
-  // --- parallel Web Worker search ---
-  let usedFallback = false;
+  // Single-threaded fallback for environments where module workers fail.
+  function runFallback() {
+    if (!vanityRunning || resultAccepted) return;
+
+    function step() {
+      if (!vanityRunning || resultAccepted) return;
+
+      try {
+        for (let i = 0; i < 400; i++) {
+          if (!vanityRunning || resultAccepted) return;
+
+          const key = bitcoin.ECPair.makeRandom({ network: net() });
+          attempts++;
+
+          const address = addressFromKey(key);
+
+          if (address.startsWith(wanted)) {
+            showFound(address, key.toWIF());
+            return;
+          }
+        }
+
+        updateStatus(1);
+        setTimeout(step, 0);
+      } catch (err) {
+        finishVanity();
+        const reason = err?.message || String(err);
+        log({ vanityError: reason });
+        toast(reason, 'bad');
+      }
+    }
+
+    step();
+  }
+
   function fallbackIfWorkersNeverRespond() {
     setTimeout(() => {
-      if (!vanityRunning || sawAnyResponse) return;
+      if (!vanityRunning || resultAccepted || sawAnyResponse) return;
+
       stopVanityWorkers();
       usedFallback = true;
-      toast('Workers unavailable in this environment - falling back to a single-threaded search.', 'info');
+
+      toast(
+        'Workers did not respond — falling back to a single-threaded search.',
+        'info'
+      );
+
       runFallback();
     }, 2500);
   }
 
   try {
     const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
+
     for (let i = 0; i < threads; i++) {
-      const worker = new Worker(new URL('./wallet/vanity-worker.js', import.meta.url), { type: 'module' });
-      worker.onmessage = (e) => {
-        if (usedFallback) return; // a stray message from a worker we already gave up on
+      const worker = new Worker(
+        new URL('./wallet/vanity-worker.js', import.meta.url),
+        { type: 'module' }
+      );
+
+      worker.onmessage = (event) => {
+        if (usedFallback || !vanityRunning || resultAccepted) return;
+
+        const msg = event.data;
+
+        if (!msg || (msg.type !== 'progress' && msg.type !== 'found')) {
+          return;
+        }
+
         sawAnyResponse = true;
-        const msg = e.data;
-        attempts += msg.attempts;
-        if (msg.type === 'found') {
-          const priv = Buffer.from(msg.privateKeyHex, 'hex');
-          const key = bitcoin.ECPair.fromPrivateKey(priv, { network: net() });
-          vanityRunning = false; // stop other workers from also reporting "found"
-          showFound(msg.address, key.toWIF());
-        } else {
-          updateStatus(vanityWorkers.length);
+
+        const batchAttempts = Number(msg.attempts);
+
+        if (
+          Number.isSafeInteger(batchAttempts) &&
+          batchAttempts >= 0
+        ) {
+          attempts += batchAttempts;
+        }
+
+        if (msg.type === 'progress') {
+          updateStatus(vanityWorkers.length || threads);
+          return;
+        }
+
+        try {
+          if (
+            typeof msg.privateKeyHex !== 'string' ||
+            !/^[0-9a-fA-F]{64}$/.test(msg.privateKeyHex)
+          ) {
+            throw new Error('The vanity worker returned an invalid private key.');
+          }
+
+          if (
+            typeof msg.address !== 'string' ||
+            !msg.address.startsWith(wanted)
+          ) {
+            throw new Error(
+              'The vanity worker returned an address that does not match the requested prefix.'
+            );
+          }
+
+          const privateKey = Buffer.from(msg.privateKeyHex, 'hex');
+
+          if (!ecc.isPrivate(privateKey)) {
+            throw new Error('The vanity worker returned an invalid private-key scalar.');
+          }
+
+          const key = bitcoin.ECPair.fromPrivateKey(privateKey, {
+            network: net()
+          });
+
+          const derivedAddress = addressFromKey(key);
+
+          // Independently verify the worker's address using the main thread.
+          if (
+            derivedAddress !== msg.address ||
+            !derivedAddress.startsWith(wanted)
+          ) {
+            throw new Error(
+              'Vanity result verification failed; no wallet was imported.'
+            );
+          }
+
+          showFound(derivedAddress, key.toWIF());
+        } catch (err) {
+          finishVanity();
+          const reason = err?.message || String(err);
+          log({ vanityError: reason });
+          toast(reason, 'bad');
         }
       };
-      worker.onerror = () => { /* handled by fallbackIfWorkersNeverRespond below */ };
-      worker.postMessage({ type: 'start', prefix: wanted, pubKeyHashVersion: net().pubKeyHash, batchSize: 3000 });
+
+      worker.onerror = (event) => {
+        // If every worker fails before responding, the timeout below
+        // will activate the fallback. Log details for diagnosis.
+        log({
+          vanityWorkerError: event?.message || 'Unknown Web Worker error'
+        });
+      };
+
       vanityWorkers.push(worker);
+
+      worker.postMessage({
+        type: 'start',
+        prefix: wanted,
+        pubKeyHashVersion: net().pubKeyHash,
+        batchSize: 3000
+      });
     }
+
     fallbackIfWorkersNeverRespond();
   } catch (err) {
     stopVanityWorkers();
+    usedFallback = true;
+
+    log({
+      vanityWorkerFallback: err?.message || String(err)
+    });
+
     runFallback();
   }
 };
