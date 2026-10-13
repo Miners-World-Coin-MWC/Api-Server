@@ -484,20 +484,34 @@ $('vanity').onclick = () => {
     step();
   }
 
+  function switchToFallback(reason) {
+    if (usedFallback || !vanityRunning || resultAccepted) return;
+
+    stopVanityWorkers();
+    usedFallback = true;
+
+    log({ vanityWorkerFallback: reason });
+    toast(
+      `Workers unavailable (${reason}) — falling back to a single-threaded search.`,
+      'info'
+    );
+
+    runFallback();
+  }
+
+  // Workers announce 'ready' once their WASM has loaded. If none do (or all fail), fall back.
   function fallbackIfWorkersNeverRespond() {
     setTimeout(() => {
       if (!vanityRunning || resultAccepted || sawAnyResponse) return;
+      switchToFallback('no worker became ready within 8 seconds');
+    }, 8000);
+  }
 
-      stopVanityWorkers();
-      usedFallback = true;
-
-      toast(
-        'Workers did not respond — falling back to a single-threaded search.',
-        'info'
-      );
-
-      runFallback();
-    }, 2500);
+  let workerFailures = 0;
+  function noteWorkerFailure(reason) {
+    workerFailures++;
+    log({ vanityWorkerError: reason, failedWorkers: workerFailures, threads });
+    if (workerFailures >= threads) switchToFallback(reason);
   }
 
   try {
@@ -511,10 +525,28 @@ $('vanity').onclick = () => {
         if (usedFallback || !vanityRunning || resultAccepted) return;
 
         const msg = event.data;
+        if (!msg) return;
 
-        if (!msg || (msg.type !== 'progress' && msg.type !== 'found')) {
+        // The worker is loaded and its message handler is installed: now it is safe to start it.
+        // (Messages posted before a module worker finishes its top-level await can be dropped,
+        // which looks exactly like "the worker never responded".)
+        if (msg.type === 'ready') {
+          sawAnyResponse = true;
+          worker.postMessage({
+            type: 'start',
+            prefix: wanted,
+            pubKeyHashVersion: net().pubKeyHash,
+            batchSize: 3000
+          });
           return;
         }
+
+        if (msg.type === 'error') {
+          noteWorkerFailure(String(msg.message || 'worker reported an error'));
+          return;
+        }
+
+        if (msg.type !== 'progress' && msg.type !== 'found') return;
 
         sawAnyResponse = true;
 
@@ -581,21 +613,18 @@ $('vanity').onclick = () => {
       };
 
       worker.onerror = (event) => {
-        // If every worker fails before responding, the timeout below
-        // will activate the fallback. Log details for diagnosis.
-        log({
-          vanityWorkerError: event?.message || 'Unknown Web Worker error'
-        });
+        if (event?.preventDefault) event.preventDefault();
+        const where = event?.filename ? ` (${event.filename}:${event.lineno || '?'})` : '';
+        noteWorkerFailure(
+          (event?.message || 'worker failed to load - check the browser console / Network tab for vanity-worker') + where
+        );
+      };
+
+      worker.onmessageerror = () => {
+        noteWorkerFailure('worker sent a message that could not be deserialized');
       };
 
       vanityWorkers.push(worker);
-
-      worker.postMessage({
-        type: 'start',
-        prefix: wanted,
-        pubKeyHashVersion: net().pubKeyHash,
-        batchSize: 3000
-      });
     }
 
     fallbackIfWorkersNeverRespond();

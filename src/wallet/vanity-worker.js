@@ -1,4 +1,3 @@
-
 /*
  * Miners World Coin — Vanity Address Worker
  *
@@ -6,15 +5,35 @@
  * Uses tiny-secp256k1 for public-key derivation and the existing
  * pure-JavaScript address encoder for MWC-compatible Base58Check addresses.
  *
- * Message protocol remains compatible with wallet-app.js:
- *   start    -> { type, prefix, pubKeyHashVersion, batchSize }
- *   stop     -> { type }
- *   progress -> { type, attempts }
- *   found    -> { type, privateKeyHex, address, attempts }
+ * Message protocol (compatible with wallet-app.js):
+ *   worker -> main  ready    -> { type }                      (sent once loaded and listening)
+ *   worker -> main  error    -> { type, message }             (load or search failure)
+ *   main   -> worker start   -> { type, prefix, pubKeyHashVersion, batchSize }
+ *   main   -> worker stop    -> { type }
+ *   worker -> main  progress -> { type, attempts }
+ *   worker -> main  found    -> { type, privateKeyHex, address, attempts }
+ *
+ * Handshake: dependencies are loaded first, the message handler is installed, and only then
+ * is 'ready' posted. The main thread starts the search in response to 'ready'. Messages posted
+ * to a module worker while its top-level await is still pending can be dropped, which looks
+ * exactly like a worker that never responds. If loading fails, the real reason is posted back
+ * as an 'error' message instead of failing silently.
  */
 
-import * as ecc from 'tiny-secp256k1';
-import { p2pkhAddress } from './address-encode.js';
+let ecc = null;
+let p2pkhAddress = null;
+
+try {
+  ecc = await import('tiny-secp256k1');
+  ({ p2pkhAddress } = await import('./address-encode.js'));
+} catch (err) {
+  ecc = null;
+  p2pkhAddress = null;
+  self.postMessage({
+    type: 'error',
+    message: 'Worker failed to load: ' + (err?.message || String(err))
+  });
+}
 
 let running = false;
 let runId = 0;
@@ -79,59 +98,69 @@ function runBatch(prefix, pubKeyHashVersion, batchSize, token) {
     return;
   }
 
-  let attempts = 0;
+  try {
+    let attempts = 0;
 
-  for (let i = 0; i < batchSize; i++) {
-    // Stop as soon as the current run has been invalidated.
+    for (let i = 0; i < batchSize; i++) {
+      // Stop as soon as the current run has been invalidated.
+      if (!running || token !== runId) {
+        return;
+      }
+
+      const privateKey = randomPrivateKey();
+      attempts++;
+
+      // Compressed public key, matching the existing wallet's address format.
+      const publicKey = ecc.pointFromScalar(privateKey, true);
+
+      if (!publicKey) {
+        continue;
+      }
+
+      const address = p2pkhAddress(publicKey, pubKeyHashVersion);
+
+      if (address.startsWith(prefix)) {
+        // Claim the result before notifying the main thread. No subsequent
+        // batch belonging to this run should report another winning key.
+        running = false;
+        runId++;
+
+        self.postMessage({
+          type: 'found',
+          privateKeyHex: toHex(privateKey),
+          address,
+          attempts
+        });
+
+        return;
+      }
+    }
+
     if (!running || token !== runId) {
       return;
     }
 
-    const privateKey = randomPrivateKey();
-    attempts++;
+    // Report the number of candidates processed in this batch.
+    // wallet-app.js accumulates this value across workers.
+    self.postMessage({
+      type: 'progress',
+      attempts
+    });
 
-    // Compressed public key, matching the existing wallet's address format.
-    const publicKey = ecc.pointFromScalar(privateKey, true);
-
-    if (!publicKey) {
-      continue;
+    // Yield to the worker event loop so stop/start messages can be processed.
+    if (running && token === runId) {
+      setTimeout(() => {
+        runBatch(prefix, pubKeyHashVersion, batchSize, token);
+      }, 0);
     }
+  } catch (err) {
+    running = false;
+    runId++;
 
-    const address = p2pkhAddress(publicKey, pubKeyHashVersion);
-
-    if (address.startsWith(prefix)) {
-      // Claim the result before notifying the main thread. No subsequent
-      // batch belonging to this run should report another winning key.
-      running = false;
-      runId++;
-
-      self.postMessage({
-        type: 'found',
-        privateKeyHex: toHex(privateKey),
-        address,
-        attempts
-      });
-
-      return;
-    }
-  }
-
-  if (!running || token !== runId) {
-    return;
-  }
-
-  // Report the number of candidates processed in this batch.
-  // wallet-app.js accumulates this value across workers.
-  self.postMessage({
-    type: 'progress',
-    attempts
-  });
-
-  // Yield to the worker event loop so stop/start messages can be processed.
-  if (running && token === runId) {
-    setTimeout(() => {
-      runBatch(prefix, pubKeyHashVersion, batchSize, token);
-    }, 0);
+    self.postMessage({
+      type: 'error',
+      message: 'Search failed: ' + (err?.message || String(err))
+    });
   }
 }
 
@@ -149,6 +178,11 @@ self.onmessage = (event) => {
   }
 
   if (message.type !== 'start') {
+    return;
+  }
+
+  // A load failure was already reported to the main thread.
+  if (!ecc || !p2pkhAddress) {
     return;
   }
 
@@ -175,3 +209,8 @@ self.onmessage = (event) => {
   running = true;
   runBatch(prefix, version, batchSize, token);
 };
+
+// Handler is installed and dependencies are loaded: tell the main thread it can start us.
+if (ecc && p2pkhAddress) {
+  self.postMessage({ type: 'ready' });
+}
