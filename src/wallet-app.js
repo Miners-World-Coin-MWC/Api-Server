@@ -398,7 +398,62 @@ $('vanity').onclick = () => {
       `est. ${eta} on average at this rate`;
   }
 
-  function showFound(address, wif) {
+  // ---- uniqueness: never hand back an address that already exists on chain ----
+  // A vanity match is only accepted if the chain shows no history for it (no receives, no
+  // unspent outputs, nothing in the mempool). Checked once per prefix match, not per attempt.
+  let checking = false;
+  let rejectedExisting = 0;
+
+  async function addressAlreadyUsed(address) {
+    const b = await api.balance(address);
+    const received = Number(b?.confirmed?.received || 0);
+    const utxoCount = (b?.confirmed?.utxos || []).length;
+    const mempoolCount = Number(b?.mempool?.txcount ?? b?.mempool?.tx?.length ?? 0);
+    return received > 0 || utxoCount > 0 || mempoolCount > 0;
+  }
+
+  // `resume` restarts the search that produced the candidate if it gets rejected.
+  async function handleCandidate(address, wif, resume) {
+    if (!vanityRunning || resultAccepted) return;
+
+    // Only one candidate is verified at a time; another match meanwhile just keeps searching.
+    if (checking) { resume(); return; }
+    checking = true;
+
+    $('vanityStatus').textContent = `Match found: ${address} — checking it has never been used on chain…`;
+
+    let used = false;
+    let verified = true;
+    let checkError = '';
+
+    try {
+      used = await addressAlreadyUsed(address);
+    } catch (err) {
+      verified = false;
+      checkError = err?.message || String(err);
+    } finally {
+      checking = false;
+    }
+
+    if (!vanityRunning || resultAccepted) return;
+
+    if (used) {
+      rejectedExisting++;
+      log({ vanityRejected: address, reason: 'address already exists on chain', rejectedExisting });
+      toast(`Skipped ${address}: it already exists on chain. Searching on…`, 'info');
+      resume();
+      return;
+    }
+
+    if (!verified) {
+      log({ vanityUnverified: address, reason: checkError });
+      toast('Could not verify this address is unused (' + checkError + '). Check it in the Balance tab before funding it.', 'info');
+    }
+
+    showFound(address, wif, verified ? 'Never used on chain ✓' : 'Could not verify — check the Balance tab');
+  }
+
+  function showFound(address, wif, chainNote) {
     if (!vanityRunning || resultAccepted) return;
 
     // Claim the result before updating the UI to prevent another worker
@@ -424,10 +479,13 @@ $('vanity').onclick = () => {
         `<div><span class="k">Attempts</span>` +
         `<span class="v">${attempts.toLocaleString()}</span></div>` +
         `<div><span class="k">Time</span>` +
-        `<span class="v">${seconds}s</span></div>`;
+        `<span class="v">${seconds}s</span></div>` +
+        `<div><span class="k">Chain check</span>` +
+        `<span class="v chain-note"></span></div>`;
 
       // Use textContent for the address rather than inserting it as HTML.
       $('vanityResult').querySelector('.mono').textContent = address;
+      $('vanityResult').querySelector('.chain-note').textContent = chainNote || '';
 
       log({
         vanity: true,
@@ -466,7 +524,7 @@ $('vanity').onclick = () => {
           const address = addressFromKey(key);
 
           if (address.startsWith(wanted)) {
-            showFound(address, key.toWIF());
+            handleCandidate(address, key.toWIF(), () => setTimeout(step, 0));
             return;
           }
         }
@@ -603,7 +661,17 @@ $('vanity').onclick = () => {
             );
           }
 
-          showFound(derivedAddress, key.toWIF());
+          handleCandidate(derivedAddress, key.toWIF(), () => {
+            // The worker stops itself after reporting a match, so restart it if we reject it.
+            if (vanityRunning && !resultAccepted && !usedFallback) {
+              worker.postMessage({
+                type: 'start',
+                prefix: wanted,
+                pubKeyHashVersion: net().pubKeyHash,
+                batchSize: 3000
+              });
+            }
+          });
         } catch (err) {
           finishVanity();
           const reason = err?.message || String(err);
