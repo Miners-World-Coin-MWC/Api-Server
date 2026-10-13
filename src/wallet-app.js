@@ -263,6 +263,28 @@ function formatDuration(seconds) {
   return `${(seconds / 86400).toFixed(1)} days`;
 }
 const ASSUMED_ATTEMPTS_PER_SECOND = 60000; // rough single-core baseline until we measure the real rate
+
+// ---------- vanity thread selector ----------
+const MAX_VANITY_THREADS = Math.max(1, Math.min(16, navigator.hardwareConcurrency || 4));
+const DEFAULT_VANITY_THREADS = Math.min(2, MAX_VANITY_THREADS);
+
+function selectedVanityThreads() {
+  const n = Number($('vanityThreads').value);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_VANITY_THREADS ? n : DEFAULT_VANITY_THREADS;
+}
+
+function initVanityThreadSelect() {
+  const select = $('vanityThreads');
+  select.innerHTML = '';
+  for (let i = 1; i <= MAX_VANITY_THREADS; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = i === 1 ? '1 thread' : `${i} threads`;
+    opt.selected = i === DEFAULT_VANITY_THREADS;
+    select.appendChild(opt);
+  }
+}
+
 function updateVanityDifficulty() {
   const typed = normalizedVanityInput();
   const el = $('vanityDifficulty');
@@ -278,7 +300,7 @@ function updateVanityDifficulty() {
   }
 
   const expected = Math.pow(58, typed.length);
-  const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
+  const threads = selectedVanityThreads();
   const eta = formatDuration(expected / (ASSUMED_ATTEMPTS_PER_SECOND * threads));
 
   el.textContent =
@@ -287,7 +309,9 @@ function updateVanityDifficulty() {
     })} attempts, roughly ${eta} on this device across ${threads} threads (varies with luck and CPU speed).`;
 }
 
+initVanityThreadSelect();
 $('vanityPrefix').addEventListener('input', updateVanityDifficulty);
+$('vanityThreads').addEventListener('change', updateVanityDifficulty);
 updateVanityDifficulty();
 
 let vanityWorkers = [];
@@ -309,6 +333,7 @@ function finishVanity() {
   stopVanityWorkers();
 
   $('vanity').disabled = false;
+  $('vanityThreads').disabled = false;
   $('vanityStop').style.display = 'none';
   $('vanityBar').style.display = 'none';
 }
@@ -345,6 +370,8 @@ $('vanity').onclick = () => {
   const expected = Math.pow(58, typed.length);
 
   vanityRunning = true;
+  const threads = selectedVanityThreads(); // captured once, used by the workers below
+  $('vanityThreads').disabled = true;
   $('vanity').disabled = true;
   $('vanityStop').style.display = '';
   $('vanityBar').style.display = '';
@@ -474,8 +501,6 @@ $('vanity').onclick = () => {
   }
 
   try {
-    const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
-
     for (let i = 0; i < threads; i++) {
       const worker = new Worker(
         new URL('./wallet/vanity-worker.js', import.meta.url),
